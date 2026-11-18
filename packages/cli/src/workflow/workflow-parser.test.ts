@@ -3027,3 +3027,23 @@ describe("toJSON(matrix) keeps YAML types", () => {
     expect(JSON.parse(out)).toEqual({ experimental: false, node: 24 });
   });
 });
+
+describe("typed inputs context", () => {
+  it("gives declared number and boolean inputs their types in toJSON(inputs)", () => {
+    const inputs = {
+      text: "hello",
+      number: "7",
+      flag: "true",
+      __input_types: JSON.stringify({ number: "number", flag: "boolean" }),
+    };
+    const out = expandExpressions(
+      "${{ toJSON(inputs) }}",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      inputs,
+    );
+    expect(JSON.parse(out)).toEqual({ text: "hello", number: 7, flag: true });
+  });
+});

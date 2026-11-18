@@ -299,6 +299,30 @@ function withoutInternalKeys(record: Record<string, string> | undefined): Record
  * empty string. `steps`, `job` and `secrets` are deliberately left out:
  * steps/job are not populated at parse time and secrets must not be dumped.
  */
+/** Internal key of an inputs context that holds the declared input types. */
+export const INPUT_TYPES_KEY = "__input_types";
+
+/** The inputs context with declared `number` / `boolean` inputs typed, as on GitHub. */
+function typedInputs(inputs: Record<string, string> | undefined): Record<string, unknown> {
+  let types: Record<string, string> = {};
+  try {
+    types = JSON.parse(inputs?.[INPUT_TYPES_KEY] ?? "{}");
+  } catch {
+    // keep strings
+  }
+  return Object.fromEntries(
+    Object.entries(withoutInternalKeys(inputs)).map(([key, value]) => {
+      if (types[key] === "number" && value.trim() !== "" && !Number.isNaN(Number(value))) {
+        return [key, Number(value)];
+      }
+      if (types[key] === "boolean" && (value === "true" || value === "false")) {
+        return [key, value === "true"];
+      }
+      return [key, value];
+    }),
+  );
+}
+
 function buildContextObject(name: string, ctx: ExprContext): unknown {
   switch (name) {
     case "github": {
@@ -342,7 +366,7 @@ function buildContextObject(name: string, ctx: ExprContext): unknown {
         ),
       };
     case "inputs":
-      return { ...ctx.inputsContext };
+      return typedInputs(ctx.inputsContext);
     case "vars":
       return { ...ctx.vars };
     case "env":

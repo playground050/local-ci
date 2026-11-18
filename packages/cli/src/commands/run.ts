@@ -1994,22 +1994,32 @@ async function handleWorkflow(options: {
       const result = jobResultStatus.get(id);
       return result ? { ...outputs, __result: result } : { ...outputs };
     };
+    // A dependency on a reusable-workflow caller is stored as its called jobs
+    // ("lint/setup"). Name it the way the needing job sees it, as on GitHub:
+    // jobs inside the same called workflow see "setup"; other jobs see only
+    // the caller "lint", with the workflow_call outputs and the worst result
+    // of its jobs.
+    const rank = (r: string | undefined) =>
+      r === "failure" ? 3 : r === "cancelled" ? 2 : r === "skipped" ? 1 : 0;
     for (const depId of jobDeps) {
-      ctx[depId] = withResult(depId, jobOutputs.get(depId));
-      if (depId.includes("/")) {
-        const callerJobId = depId.split("/")[0];
-        const calledJobId = depId.split("/").slice(1).join("/");
-        // For composite IDs like "lint/setup", also add the called job ID ("setup")
-        // so intra-workflow `needs.setup.outputs.*` references resolve correctly
-        if (!ctx[calledJobId]) {
-          ctx[calledJobId] = withResult(depId, jobOutputs.get(depId));
-        }
-        // If workflow_call outputs were resolved for the caller (e.g. "lint"),
-        // add them so downstream `needs.lint.outputs.*` references work
-        if (jobOutputs.has(callerJobId)) {
-          ctx[callerJobId] = jobOutputs.get(callerJobId)!;
-        }
+      if (!depId.includes("/")) {
+        ctx[depId] = withResult(depId, jobOutputs.get(depId));
+        continue;
       }
+      const callerJobId = depId.split("/")[0];
+      const calledJobId = depId.split("/").slice(1).join("/");
+      if (jobId.startsWith(`${callerJobId}/`)) {
+        ctx[calledJobId] = withResult(depId, jobOutputs.get(depId));
+        continue;
+      }
+      const previous = ctx[callerJobId]?.__result;
+      const result = jobResultStatus.get(depId);
+      ctx[callerJobId] = {
+        ...jobOutputs.get(callerJobId),
+        ...(result || previous
+          ? { __result: rank(result) >= rank(previous) ? (result ?? previous!) : previous! }
+          : {}),
+      };
     }
     return Object.keys(ctx).length > 0 ? ctx : undefined;
   };

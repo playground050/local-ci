@@ -1,3 +1,4 @@
+import { INPUT_TYPES_KEY } from "./workflow-parser.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
@@ -107,6 +108,19 @@ function expandReusableJobsInternal(
                 .map(([k, def]: [string, any]) => [k, String(def.default)]),
             )
           : undefined;
+
+      // Declared types travel with the defaults under an internal key, so the
+      // `inputs` context can give numbers and booleans their types.
+      if (wcInputs && typeof wcInputs === "object") {
+        const types = Object.fromEntries(
+          Object.entries(wcInputs)
+            .filter(([, def]: [string, any]) => def?.type === "number" || def?.type === "boolean")
+            .map(([k, def]: [string, any]) => [k, def.type as string]),
+        );
+        if (Object.keys(types).length > 0) {
+          (inputDefaults as Record<string, string>)[INPUT_TYPES_KEY] = JSON.stringify(types);
+        }
+      }
 
       const wcOutputs = (calledRaw.on || calledRaw.true)?.workflow_call?.outputs;
       const workflowCallOutputDefs: Record<string, string> | undefined =

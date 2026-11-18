@@ -436,7 +436,7 @@
         {
           "key": "`inputs.*`",
           "status": "supported",
-          "notes": "Reusable-workflow and (nominally) `workflow_dispatch` input values. Inside a called workflow, `inputs.<name>` resolves to the caller's `with:` value or the declared `default:`.",
+          "notes": "Reusable-workflow and (nominally) `workflow_dispatch` input values. Inside a called workflow, `inputs.<name>` resolves to the caller's `with:` value or the declared `default:`; `number` and `boolean` inputs keep their types",
           "proof": [".github/workflows/smoke-reusable-inputs-outputs.yml"]
         },
         {
