@@ -446,6 +446,7 @@ const STATUS_FUNCTIONS: Record<string, string> = {
 const CONST_CONTEXT_REFS: Record<string, string> = {
   "github.run_id": "1",
   "github.run_number": "1",
+  "github.run_attempt": "1",
   "github.sha": ZERO_SHA,
   "github.head_sha": ZERO_SHA,
   "github.ref_name": "main",

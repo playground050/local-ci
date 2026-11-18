@@ -282,6 +282,11 @@ export function createJobResponse(
     head_ref: "",
     repository_owner: ownerName,
     triggering_actor: ownerName,
+    // Same static values as Local CI uses when it expands expressions itself,
+    // so keys such as `cache-${{ github.run_id }}` agree on both sides.
+    run_id: "1",
+    run_number: "1",
+    run_attempt: "1",
     workflow: workflowName,
     ...(payload.workflowFile
       ? { workflow_ref: `${repoFullName}/${payload.workflowFile}@refs/heads/main` }
