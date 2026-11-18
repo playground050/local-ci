@@ -38,7 +38,17 @@ type ParsedStep = {
   Reference?: { Type?: string; Name?: string; Path?: string; Ref?: string };
   Inputs?: Record<string, string>;
   Env?: Record<string, string>;
+  /** Workflow + job env, delivered to the runner once for the job. */
+  JobEnv?: Record<string, string>;
 };
+
+/** The env a step sees: workflow + job env (JobEnv) under the step's own Env. */
+function effectiveEnv(step: ParsedStep): Record<string, string> | undefined {
+  if (!step.Env && !step.JobEnv) {
+    return undefined;
+  }
+  return { ...step.JobEnv, ...step.Env };
+}
 
 type Scope = "workflow" | "job" | "step";
 
@@ -210,7 +220,10 @@ async function jobLevelEnvFlowsToSteps(
       return false;
     }
     // Find a step whose Env is populated and contains at least one job-level key.
-    return parsedSteps.some((s) => s.Env && jobEnvKeys.every((k) => Object.hasOwn(s.Env!, k)));
+    return parsedSteps.some((s) => {
+      const env = effectiveEnv(s);
+      return env !== undefined && jobEnvKeys.every((k) => Object.hasOwn(env, k));
+    });
   } catch {
     return false;
   }
@@ -430,7 +443,8 @@ async function workflowEnvFlowsToSteps(
     try {
       const steps = (await parseWorkflowSteps(filePath, jobId)) as ParsedStep[];
       for (const step of steps) {
-        if (step.Env && envKeys.every((k) => Object.hasOwn(step.Env!, k))) {
+        const env = effectiveEnv(step);
+        if (env && envKeys.every((k) => Object.hasOwn(env, k))) {
           return true;
         }
       }

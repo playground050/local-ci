@@ -1873,8 +1873,8 @@ jobs:
     const needsCtx = { setup: { skip: "false" } };
     const steps = await parseWorkflowSteps(filePath, "test", undefined, undefined, needsCtx);
 
-    // The step script should have "false" substituted in
-    expect((steps[0] as any).Inputs.script).toBe("echo false");
+    // needs is sent to the runner, which evaluates it while the job runs
+    expect((steps[0] as any).Inputs.script).toBe("echo ${{ needs.setup.outputs.skip }}");
   });
 
   it("resolves needs context in step names", async () => {
@@ -2001,34 +2001,43 @@ jobs:
   it("resolves workflow-level env", async () => {
     const filePath = writeWorkflowTree(MASCOT_WORKFLOW);
     const steps = await parseWorkflowSteps(filePath, "windows_job");
-    expect((steps[0] as any).Inputs.script).toBe("echo 'Hi Mona'");
+    // env is evaluated by the runner, so values written to GITHUB_ENV are seen
+    expect((steps[0] as any).Inputs.script).toBe("echo 'Hi ${{ env.mascot }}'");
+    expect((steps[0] as any).JobEnv).toEqual({
+      mascot: "Mona",
+      super_duper_var: "totally_awesome",
+    });
+    expect((steps[0] as any).Env).toBeUndefined();
   });
 
   it("resolves step-level env overriding workflow-level env", async () => {
     const filePath = writeWorkflowTree(MASCOT_WORKFLOW);
     const steps = await parseWorkflowSteps(filePath, "windows_job");
-    expect((steps[1] as any).Inputs.script).toBe("echo 'Hi Octocat'");
+    expect((steps[1] as any).Env).toEqual({ mascot: "Octocat" });
+    expect((steps[1] as any).JobEnv.mascot).toBe("Mona");
   });
 
   it("resolves job-level env overriding workflow-level env", async () => {
     const filePath = writeWorkflowTree(MASCOT_WORKFLOW);
     const steps = await parseWorkflowSteps(filePath, "linux_job");
-    expect((steps[0] as any).Inputs.script).toBe("echo 'Hi Tux'");
+    expect((steps[0] as any).JobEnv.mascot).toBe("Tux");
   });
 
   it("resolves job-level env in action input params", async () => {
     const filePath = writeWorkflowTree(CACHE_WORKFLOW);
     const steps = await parseWorkflowSteps(filePath, "build");
-    expect((steps[0] as any).Inputs.path).toBe("tmp/cache");
+    expect((steps[0] as any).Inputs.path).toBe("${{ env.CACHE_PATH }}");
+    expect((steps[0] as any).JobEnv).toEqual({ CACHE_PATH: "tmp/cache" });
   });
 
   it("resolves job-level and step-level env in action input params", async () => {
     const filePath = writeWorkflowTree(CACHE_WORKFLOW);
     const steps = await parseWorkflowSteps(filePath, "build");
-    expect((steps[0] as any).Inputs.key).toBe("build-Linux-abc123");
+    expect((steps[0] as any).Inputs.key).toBe("build-Linux-${{ env.CACHE_SUFFIX }}");
+    expect((steps[0] as any).Env).toEqual({ CACHE_SUFFIX: "abc123" });
   });
 
-  it("returns empty string for env.* when env var does not exist", async () => {
+  it("leaves env.* for the runner even when no env is declared", async () => {
     const filePath = writeWorkflowTree(`
 name: Missing Env
 on: [push]
@@ -2042,7 +2051,7 @@ jobs:
           key: my-key
 `);
     const steps = await parseWorkflowSteps(filePath, "repro");
-    expect((steps[0] as any).Inputs.path).toBe("");
+    expect((steps[0] as any).Inputs.path).toBe("${{ env.NONEXISTENT }}");
   });
 
   it("expands env.* in step name:", async () => {
@@ -2382,7 +2391,7 @@ jobs:
       - run: echo hi
 `);
     const steps = await parseWorkflowSteps(filePath, "test");
-    expect((steps[0] as any).Env).toEqual({ FROM_JOB: "job-value" });
+    expect((steps[0] as any).JobEnv).toEqual({ FROM_JOB: "job-value" });
   });
 
   it("propagates workflow-level env to steps", async () => {
@@ -2398,7 +2407,7 @@ jobs:
       - run: echo hi
 `);
     const steps = await parseWorkflowSteps(filePath, "test");
-    expect((steps[0] as any).Env).toEqual({ FROM_WORKFLOW: "workflow-value" });
+    expect((steps[0] as any).JobEnv).toEqual({ FROM_WORKFLOW: "workflow-value" });
   });
 
   it("merges workflow + job + step env with step-overrides-job-overrides-workflow precedence", async () => {
@@ -2421,11 +2430,13 @@ jobs:
         run: echo hi
 `);
     const steps = await parseWorkflowSteps(filePath, "test");
-    expect((steps[0] as any).Env).toEqual({
-      LEVEL: "step",
+    // The step's own env goes on the step; workflow + job env go to the job,
+    // where GITHUB_ENV writes can override them (the runner layers them).
+    expect((steps[0] as any).Env).toEqual({ LEVEL: "step", STEP_ONLY: "step" });
+    expect((steps[0] as any).JobEnv).toEqual({
+      LEVEL: "job",
       WF_ONLY: "workflow",
       JOB_ONLY: "job",
-      STEP_ONLY: "step",
     });
   });
 
@@ -2451,7 +2462,7 @@ jobs:
       undefined,
       vars,
     );
-    expect((steps[0] as any).Env).toEqual({ API_URL: "https://api.example.com" });
+    expect((steps[0] as any).JobEnv).toEqual({ API_URL: "https://api.example.com" });
   });
 
   it("returns undefined Env when no env declared at any level", async () => {
@@ -2731,11 +2742,8 @@ jobs:
       githubCtx,
     )) as any[];
 
-    expect(steps[0].Env).toMatchObject({
-      WORKFLOW_SHA: sha,
-      JOB_REPO: "acme/widgets",
-      STEP_SHA: sha,
-    });
+    expect(steps[0].JobEnv).toMatchObject({ WORKFLOW_SHA: sha, JOB_REPO: "acme/widgets" });
+    expect(steps[0].Env).toMatchObject({ STEP_SHA: sha });
     expect(steps[0].Inputs.script).toBe(`echo acme/widgets@${sha}`);
     expect(steps[0].Name).toBe(`build ${sha}`);
     expect(steps[1].Inputs.key).toBe(`deps-${sha}`);

@@ -430,7 +430,7 @@
         {
           "key": "`env.*`",
           "status": "supported",
-          "notes": "The merged step environment (workflow-level → job-level → step-level, with step taking precedence) is available as `env.*` in `with:` inputs, `run:` scripts, `name:`, and `env:` value expressions. Not yet supported in `if:` conditions (the expression is evaluated by the runner, not the parser). Note: `env.*` references inside an `env:` block (one env var referencing another declared in the same block) are not evaluated — only the already-computed merged value is exposed.",
+          "notes": "In steps the runner evaluates it, so values written to `GITHUB_ENV` are seen and override workflow/job `env:` (the step's own `env:` still wins). Elsewhere, the merged workflow → job → step env",
           "proof": [".github/workflows/smoke-env-context.yml"]
         },
         {

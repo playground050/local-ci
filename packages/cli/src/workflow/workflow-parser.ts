@@ -725,8 +725,39 @@ export function expandExpressions(
     githubContext,
   };
   return value.replace(/\$\{\{([\s\S]*?)\}\}/g, (match, expr: string) =>
-    keepRuntimeContexts && referencesRuntimeContext(expr) ? match : evaluateExprValue(expr, ctx),
+    keepRuntimeContexts && runnerCanEvaluate(expr) ? match : evaluateExprValue(expr, ctx),
   );
+}
+
+// Contexts the runner has while the job runs. `steps` and `job` exist only
+// then; env (including GITHUB_ENV writes), matrix, strategy and needs are sent
+// to the runner with the job, so it evaluates them exactly as GitHub does.
+const RUNNER_CONTEXTS = new Set(["steps", "job", "env", "matrix", "strategy", "needs"]);
+const LITERAL_WORDS = new Set(["true", "false", "null", "NaN", "Infinity"]);
+
+/** The context names an expression reads (`github` in `github.sha`), without functions. */
+function contextRoots(expr: string): string[] {
+  const withoutStrings = expr.replace(/'(?:[^']|'')*'/g, "''");
+  const roots: string[] = [];
+  for (const m of withoutStrings.matchAll(/(?<![\w.-])([A-Za-z_][\w-]*)(\s*\()?/g)) {
+    if (!m[2] && !LITERAL_WORDS.has(m[1])) {
+      roots.push(m[1]);
+    }
+  }
+  return roots;
+}
+
+/**
+ * Whether a step-level expression can be left for the runner: it reads only
+ * contexts the runner has (or none, such as `hashFiles(…)` or literals).
+ * Expressions that read `steps` or `job` must be left for the runner.
+ */
+export function runnerCanEvaluate(expr: string): boolean {
+  const roots = contextRoots(expr);
+  if (roots.some((r) => r === "steps" || r === "job")) {
+    return true;
+  }
+  return roots.every((r) => RUNNER_CONTEXTS.has(r));
 }
 
 // `steps` and `job` only exist while the job runs. References to them (outside
@@ -1098,7 +1129,7 @@ function buildStepEnv(
   vars: Record<string, string> | undefined,
   runnerContext: RunnerContext | undefined,
   githubContext: Record<string, string> | undefined,
-): Record<string, string> | undefined {
+): StepEnvScopes | undefined {
   const pick = (source: unknown): Record<string, unknown> => {
     if (!source || typeof source !== "object") {
       return {};
@@ -1146,7 +1177,19 @@ function buildStepEnv(
   const resolvedJob = resolveScope(jobEnv, resolvedWorkflow);
   const baseEnv: Record<string, string> = { ...resolvedWorkflow, ...resolvedJob };
   const resolvedStep = resolveScope(stepEnv, baseEnv);
-  return { ...baseEnv, ...resolvedStep };
+  return { merged: { ...baseEnv, ...resolvedStep }, job: baseEnv, step: resolvedStep };
+}
+
+/**
+ * A step's env in its scopes. `merged` is what the step sees (for expressions
+ * Local CI evaluates itself). The runner gets `job` once for the whole job and
+ * `step` on the step, so values written to GITHUB_ENV take precedence over the
+ * job's env and lose to the step's own env, as on GitHub.
+ */
+interface StepEnvScopes {
+  merged: Record<string, string>;
+  job: Record<string, string>;
+  step: Record<string, string>;
 }
 
 function splitRemoteActionReference(name: string): { name: string; path: string } {
@@ -1201,7 +1244,7 @@ export async function parseWorkflowSteps(
       const stepId = step.id || `step-${index + 1}`;
       const rawStep = rawSteps[index] || {};
 
-      const stepEnv = buildStepEnv(
+      const envScopes = buildStepEnv(
         rawYaml,
         rawJob,
         rawStep,
@@ -1214,6 +1257,13 @@ export async function parseWorkflowSteps(
         runnerContext,
         githubContext,
       );
+      const stepEnv = envScopes?.merged;
+      const runnerEnv = envScopes
+        ? {
+            ...(Object.keys(envScopes.step).length > 0 ? { Env: envScopes.step } : {}),
+            ...(Object.keys(envScopes.job).length > 0 ? { JobEnv: envScopes.job } : {}),
+          }
+        : {};
       const continueOnError = resolveContinueOnError(rawStep["continue-on-error"], (value) =>
         expandExpressions(
           value,
@@ -1307,7 +1357,7 @@ export async function parseWorkflowSteps(
             Type: "Script",
           },
           Inputs: inputs,
-          Env: stepEnv,
+          ...runnerEnv,
           ...(condition !== undefined ? { condition } : {}),
           ...(continueOnError ? { continueOnError } : {}),
         };
@@ -1423,7 +1473,7 @@ export async function parseWorkflowSteps(
                 }
               : {}), // Prevent actions/checkout from wiping the rsynced workspace
           },
-          Env: stepEnv,
+          ...runnerEnv,
           ...(condition !== undefined ? { condition } : {}),
           ...(continueOnError ? { continueOnError } : {}),
         };

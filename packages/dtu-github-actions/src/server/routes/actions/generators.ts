@@ -151,12 +151,10 @@ export function createJobResponse(
       s.continueOnError = true;
     }
 
-    // Attach step-level env as the step's own `environment` so it applies
-    // only to this step. Without this, step envs aggregate into the global
-    // `EnvironmentVariables` map (last-wins), leaking a later step's env
-    // backwards into earlier steps. step.Env is the already-merged view
-    // (workflow → job → step); applying it per-step makes each step see
-    // the correct effective env regardless of siblings.
+    // Attach the step's own env: as its `environment` so it applies only to
+    // this step. Workflow and job env (step.JobEnv) go to the job-wide
+    // EnvironmentVariables instead, so a value written to GITHUB_ENV in an
+    // earlier step overrides them, while the step's own env still wins.
     if (step.Env && typeof step.Env === "object" && Object.keys(step.Env).length > 0) {
       s.environment = toTemplateTokenMapping(step.Env);
     }
@@ -291,6 +289,11 @@ export function createJobResponse(
   const mergedEnv: Record<string, string> = {};
   if (payload.env && typeof payload.env === "object") {
     Object.assign(mergedEnv, payload.env);
+  }
+  // Workflow + job env: is the same on every step; take it from the first one.
+  const jobEnv = (payload.steps || []).find((step: any) => step?.JobEnv)?.JobEnv;
+  if (jobEnv && typeof jobEnv === "object") {
+    Object.assign(mergedEnv, jobEnv);
   }
 
   // matrix / strategy / needs for expressions the runner evaluates while the
