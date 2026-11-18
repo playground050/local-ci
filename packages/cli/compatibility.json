@@ -162,7 +162,7 @@
         {
           "key": "`jobs.<id>.if`",
           "status": "supported",
-          "notes": "`success()`, `failure()`, `always()`, `cancelled()`, `==`/`!=`, `&&`/`||`, `!`, `needs.*.outputs.*`, `needs.*.result`",
+          "notes": "Full expression syntax with GitHub's typing rules (`true == 1`, case-insensitive strings, `0xff`, `a[1]`, `.*`, `format`, `contains`, …) over `github`, `vars`, `inputs` and `needs` (`outputs`, `result`). Status functions `success()`, `failure()`, `always()`, `cancelled()`; without one, `success() &&` is implied as on GitHub",
           "proof": [".github/workflows/smoke-conditions.yml"]
         },
         {

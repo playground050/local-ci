@@ -49,6 +49,7 @@ import {
   parseJobOutputDefs,
   parseJobIf,
   evaluateJobIf,
+  jobIfContexts,
   parseJobContinueOnError,
   parseJobRunsOn,
   expandExpressions,
@@ -2091,7 +2092,13 @@ async function handleWorkflow(options: {
     // (implicit success()); skipped upstream jobs skip it too.
     const upstreamResults = collectAncestorResults(jobId, deps, jobResultStatus);
     const needsCtx = buildNeedsContext(jobId);
-    return !evaluateJobIf(ifExpr ?? "success()", upstreamResults, needsCtx);
+    const inputs = ej?.callerJobId ? { ...ej.inputDefaults, ...ej.inputs } : undefined;
+    return !evaluateJobIf(
+      ifExpr ?? "success()",
+      upstreamResults,
+      needsCtx,
+      jobIfContexts(workflowGithubContext, vars, inputs),
+    );
   };
 
   /** Run a job or skip it based on if: condition or unsupported OS */

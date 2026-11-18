@@ -1,3 +1,4 @@
+import { callsStatusFunction, evaluateExpression, isTruthy } from "./expression.ts";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -449,7 +450,11 @@ const CONST_CONTEXT_REFS: Record<string, string> = {
   "github.run_attempt": "1",
   "github.sha": ZERO_SHA,
   "github.head_sha": ZERO_SHA,
+  "github.ref": "refs/heads/main",
   "github.ref_name": "main",
+  "github.ref_type": "branch",
+  "github.event_name": "push",
+  "github.server_url": "https://github.com",
   "github.head_ref": "main",
   "github.repository": "local/repo",
   "github.actor": "local",
@@ -2075,35 +2080,60 @@ export function parseStepIf(rawIf: unknown): string | undefined {
  * @param needsCtx   Optional needs output context (same shape as expandExpressions needsContext)
  * @returns          Whether the job should run
  */
+/** The contexts a job-level `if:` can read besides `needs`: github, vars, inputs. */
+export function jobIfContexts(
+  githubContext?: Record<string, string>,
+  vars?: Record<string, string>,
+  inputsContext?: Record<string, string>,
+): Record<string, unknown> {
+  const ctx: ExprContext = { githubContext, vars, inputsContext };
+  return {
+    github: buildContextObject("github", ctx),
+    vars: buildContextObject("vars", ctx),
+    inputs: buildContextObject("inputs", ctx),
+  };
+}
+
 export function evaluateJobIf(
   expr: string,
   jobResults: Record<string, string>,
   needsCtx?: Record<string, Record<string, string>>,
+  contexts: Record<string, unknown> = {},
 ): boolean {
-  const trimmed = expr.trim();
-
-  // Empty expression defaults to success()
+  let trimmed = expr.trim();
+  const wrapped = /^\$\{\{([\s\S]*)\}\}$/.exec(trimmed);
+  if (wrapped) {
+    trimmed = wrapped[1].trim();
+  }
+  // As on GitHub, a condition without a status function runs only when every
+  // upstream job succeeded: `x` means `success() && (x)`.
   if (!trimmed) {
-    return evaluateAtom("success()", jobResults, needsCtx);
+    trimmed = "success()";
+  } else if (!callsStatusFunction(trimmed)) {
+    trimmed = `success() && (${trimmed})`;
   }
-
-  // Handle || (split first — lower precedence)
-  if (trimmed.includes("||")) {
-    const parts = splitOnOperator(trimmed, "||");
-    if (parts.length > 1) {
-      return parts.some((p) => evaluateJobIf(p.trim(), jobResults, needsCtx));
-    }
+  const results = Object.values(jobResults);
+  const needs = Object.fromEntries(
+    Object.entries(needsCtx ?? {}).map(([job, values]) => [
+      job,
+      { outputs: withoutInternalKeys(values), result: values?.["__result"] ?? "success" },
+    ]),
+  );
+  try {
+    return isTruthy(
+      evaluateExpression(trimmed, {
+        contexts: { ...contexts, needs },
+        functions: {
+          always: () => true,
+          cancelled: () => false,
+          success: () => results.every((r) => r === "success"),
+          failure: () => results.some((r) => r === "failure"),
+        },
+      }),
+    );
+  } catch (err) {
+    throw new Error(`Invalid job if: ${expr} (${(err as Error).message})`);
   }
-
-  // Handle &&
-  if (trimmed.includes("&&")) {
-    const parts = splitOnOperator(trimmed, "&&");
-    if (parts.length > 1) {
-      return parts.every((p) => evaluateJobIf(p.trim(), jobResults, needsCtx));
-    }
-  }
-
-  return evaluateAtom(trimmed, jobResults, needsCtx);
 }
 
 /**
@@ -2145,78 +2175,6 @@ function splitOnOperator(expr: string, op: string): string[] {
   }
   parts.push(current);
   return parts;
-}
-
-/**
- * Evaluate a single atomic condition (no && or ||).
- */
-function evaluateAtom(
-  expr: string,
-  jobResults: Record<string, string>,
-  needsCtx?: Record<string, Record<string, string>>,
-): boolean {
-  const trimmed = expr.trim();
-
-  // Status check functions
-  if (trimmed === "always()") {
-    return true;
-  }
-  if (trimmed === "cancelled()") {
-    return false;
-  }
-  if (trimmed === "success()") {
-    return Object.values(jobResults).every((r) => r === "success");
-  }
-  if (trimmed === "failure()") {
-    return Object.values(jobResults).some((r) => r === "failure");
-  }
-
-  // != comparison
-  const neqMatch = trimmed.match(/^(.+?)\s*!=\s*(.+)$/);
-  if (neqMatch) {
-    const left = resolveValue(neqMatch[1].trim(), needsCtx);
-    const right = resolveValue(neqMatch[2].trim(), needsCtx);
-    return left !== right;
-  }
-
-  // == comparison
-  const eqMatch = trimmed.match(/^(.+?)\s*==\s*(.+)$/);
-  if (eqMatch) {
-    const left = resolveValue(eqMatch[1].trim(), needsCtx);
-    const right = resolveValue(eqMatch[2].trim(), needsCtx);
-    return left === right;
-  }
-
-  // Bare truthy value (e.g. needs.setup.outputs.run_tests)
-  const val = resolveValue(trimmed, needsCtx);
-  return val !== "" && val !== "false" && val !== "0";
-}
-
-/**
- * Resolve a value reference in a condition expression.
- */
-function resolveValue(raw: string, needsCtx?: Record<string, Record<string, string>>): string {
-  const trimmed = raw.trim();
-  // Quoted string literal
-  if (
-    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
-    (trimmed.startsWith('"') && trimmed.endsWith('"'))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-  // needs.<jobId>.outputs.<name>
-  if (trimmed.startsWith("needs.") && needsCtx) {
-    const parts = trimmed.split(".");
-    const jobId = parts[1];
-    const jobOutputs = needsCtx[jobId];
-    if (parts[2] === "outputs" && parts[3]) {
-      return jobOutputs?.[parts[3]] ?? "";
-    }
-    if (parts[2] === "result") {
-      return jobOutputs ? (jobOutputs["__result"] ?? "success") : "";
-    }
-  }
-  return trimmed;
 }
 
 /**
