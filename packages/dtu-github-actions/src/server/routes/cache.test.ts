@@ -88,6 +88,25 @@ describe("DTU Cache API", () => {
     });
   });
 
+  it("restores the newest entry whose key starts with a restore key", async () => {
+    const baseUrl = `http://localhost:${PORT}`;
+    await createCache(baseUrl, "deps-linux-aaa", "1", "old");
+    const newest = await createCache(baseUrl, "deps-linux-bbb", "1", "new");
+    await createCache(baseUrl, "deps-mac-ccc", "1", "other");
+
+    const res = await fetch(
+      `${baseUrl}/_apis/artifactcache/caches?keys=deps-linux-zzz,deps-linux-&version=1`,
+    );
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.cacheKey).toBe("deps-linux-bbb");
+    expect(data.archiveLocation).toBe(`${baseUrl}/_apis/artifactcache/artifacts/${newest}`);
+
+    // A different version never matches, even by prefix
+    const other = await fetch(`${baseUrl}/_apis/artifactcache/caches?keys=deps-linux-&version=2`);
+    expect(other.status).toBe(204);
+  });
+
   it("should handle full cache lifecycle", async () => {
     const baseUrl = `http://localhost:${PORT}`;
 

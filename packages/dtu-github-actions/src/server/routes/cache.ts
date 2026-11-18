@@ -22,6 +22,41 @@ if (!fs.existsSync(EMPTY_TAR_GZ_PATH)) {
 }
 const VIRTUAL_CACHE_ID = 0; // sentinel ID for virtual (no-op) caches
 
+/** Whether a committed entry's archive is still on disk; evicts it if not. */
+function cacheEntryUsable(key: string): boolean {
+  const entry = state.caches.get(key);
+  if (!entry) {
+    return false;
+  }
+  const cacheIdMatch = entry.archiveLocation.match(/artifacts\/(\d+)/);
+  if (cacheIdMatch) {
+    const filePath = path.join(CACHE_DIR, `cache_${cacheIdMatch[1]}.tar.gz`);
+    if (!fs.existsSync(filePath)) {
+      console.warn(`[DTU] Evicting stale cache "${key}" — file missing: ${filePath}`);
+      state.caches.delete(key);
+      state.saveCachesToDisk();
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The cache key to restore for one requested key: the key itself when it
+ * exists, otherwise the most recently saved key that starts with it.
+ * Entries are kept in save order (a re-saved key is moved to the end).
+ */
+export function findCacheKey(key: string, version: string): string | undefined {
+  if (state.caches.get(key)?.version === version && cacheEntryUsable(key)) {
+    return key;
+  }
+  const candidates = [...state.caches.entries()]
+    .filter(([k, entry]) => k.startsWith(key) && entry.version === version)
+    .map(([k]) => k)
+    .reverse();
+  return candidates.find((k) => cacheEntryUsable(k));
+}
+
 export function registerCacheRoutes(app: Polka) {
   // 1. Check if cache exists
   const checkCacheHandler = (req: any, res: any) => {
@@ -49,21 +84,15 @@ export function registerCacheRoutes(app: Polka) {
         );
       }
 
-      const entry = state.caches.get(key);
-      if (entry && entry.version === version) {
-        // Validate archive file still exists on disk
+      // As on GitHub: an exact match first, then the newest entry whose key
+      // starts with this key (how `restore-keys` prefixes match).
+      const matchedKey = findCacheKey(key, version);
+      const entry = matchedKey ? state.caches.get(matchedKey) : undefined;
+      if (matchedKey && entry) {
         const cacheIdMatch = entry.archiveLocation.match(/artifacts\/(\d+)/);
-        if (cacheIdMatch) {
-          const filePath = path.join(CACHE_DIR, `cache_${cacheIdMatch[1]}.tar.gz`);
-          if (!fs.existsSync(filePath)) {
-            console.warn(`[DTU] Evicting stale cache "${key}" — file missing: ${filePath}`);
-            state.caches.delete(key);
-            state.saveCachesToDisk();
-            continue;
-          }
-        }
-
-        console.log(`[DTU] Cache hit for key: ${key}`);
+        console.log(
+          `[DTU] Cache hit for key: ${key}${matchedKey !== key ? ` (matched ${matchedKey})` : ""}`,
+        );
 
         // Construct archiveLocation dynamically from the current request so stale
         // hostnames persisted in caches.json don't cause download failures.
@@ -76,7 +105,7 @@ export function registerCacheRoutes(app: Polka) {
           JSON.stringify({
             result: "hit",
             archiveLocation,
-            cacheKey: key,
+            cacheKey: matchedKey,
           }),
         );
       }
@@ -231,6 +260,7 @@ export function registerCacheRoutes(app: Polka) {
     const baseUrl = getBaseUrl(req);
     const archiveLocation = `${baseUrl}/_apis/artifactcache/artifacts/${cacheId}`;
 
+    state.caches.delete(pending.key); // keep entries in save order (newest last)
     state.caches.set(pending.key, {
       version: pending.version,
       archiveLocation,

@@ -583,7 +583,7 @@
         {
           "key": "`actions/cache`",
           "status": "partial",
-          "notes": "Cache is stored on the local filesystem via bind-mount, giving ~0 ms round-trip on cache hits. Scoping is by cache key only — GitHub's ref-based isolation (a branch cannot read another branch's cache, default branch is a fallback) is not implemented. If two workflows on different refs share a key they share the cache.",
+          "notes": "Cache is stored on the local filesystem via bind-mount, giving ~0 ms round-trip on cache hits. `restore-keys` match by prefix (newest entry first), as on GitHub. Scoping is by cache key only — GitHub's ref-based isolation (a branch cannot read another branch's cache, default branch is a fallback) is not implemented. If two workflows on different refs share a key they share the cache.",
           "proof": [".github/workflows/smoke-artifacts.yml"]
         },
         {
