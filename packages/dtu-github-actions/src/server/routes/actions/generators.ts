@@ -120,6 +120,12 @@ export function createJobResponse(
       condition: step.condition || "success()",
     };
 
+    // `continue-on-error:` — the runner records the failure (outcome failure,
+    // conclusion success) and keeps running the job, exactly as on GitHub.
+    if (step.continueOnError === true) {
+      s.continueOnError = true;
+    }
+
     // Attach step-level env as the step's own `environment` so it applies
     // only to this step. Without this, step envs aggregate into the global
     // `EnvironmentVariables` map (last-wins), leaking a later step's env

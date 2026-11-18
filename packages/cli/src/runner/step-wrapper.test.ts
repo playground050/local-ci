@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   appendOutputCaptureStep,
   createOutputCaptureStep,
+  resolveContinueOnErrorMode,
   wrapJobSteps,
   wrapStepScript,
 } from "./step-wrapper.ts";
@@ -117,5 +118,38 @@ describe("createOutputCaptureStep", () => {
     const steps = appendOutputCaptureStep([{ Name: "build" }]);
     expect(steps.map((s) => s.Name)).toEqual(["build", "__local_ci_output_capture"]);
     expect(appendOutputCaptureStep([])).toEqual([]);
+  });
+});
+
+describe("continue-on-error under --pause-on-failure", () => {
+  const steps = [
+    {
+      Name: "soft",
+      Reference: { Type: "Script" },
+      Inputs: { script: "exit 3" },
+      continueOnError: true,
+    },
+    { Name: "hard", Reference: { Type: "Script" }, Inputs: { script: "exit 1" } },
+  ];
+
+  it("pauses on continue-on-error steps by default", () => {
+    const wrapped = wrapJobSteps(steps, true);
+    expect(wrapped[0].Inputs.script).toContain("Paused");
+    expect(wrapped[1].Inputs.script).toContain("Paused");
+  });
+
+  it("leaves continue-on-error steps to the runner in continue mode", () => {
+    const wrapped = wrapJobSteps(steps, true, { pauseContinueOnErrorSteps: false });
+    expect(wrapped[0].Inputs.script).toBe("exit 3");
+    expect(wrapped[0].continueOnError).toBe(true);
+    expect(wrapped[1].Inputs.script).toContain("Paused");
+  });
+
+  it("resolves the mode from LOCAL_CI_CONTINUE_ON_ERROR", () => {
+    expect(resolveContinueOnErrorMode(undefined)).toBe("pause");
+    expect(resolveContinueOnErrorMode("continue")).toBe("continue");
+    expect(resolveContinueOnErrorMode(" Continue ")).toBe("continue");
+    expect(resolveContinueOnErrorMode("pause")).toBe("pause");
+    expect(resolveContinueOnErrorMode("bogus")).toBe("pause");
   });
 });

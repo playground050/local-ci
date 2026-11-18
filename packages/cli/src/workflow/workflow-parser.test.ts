@@ -2833,3 +2833,66 @@ describe("expandExpressions — toJSON of whole contexts", () => {
     expect(toJson("toJSON(secrets)", { secrets: { TOKEN: "s3cret" } })).toBe("");
   });
 });
+
+describe("parseWorkflowSteps — continue-on-error", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function writeWorkflowTree(content: string): string {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oa-continue-on-error-"));
+    const workflowDir = path.join(tmpDir, ".github", "workflows");
+    fs.mkdirSync(workflowDir, { recursive: true });
+    const filePath = path.join(workflowDir, "test.yml");
+    fs.writeFileSync(filePath, content);
+    return filePath;
+  }
+
+  it("marks run and uses steps with continue-on-error, including expressions", async () => {
+    const filePath = writeWorkflowTree(`
+name: Continue on error
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 3
+        continue-on-error: true
+      - run: echo plain
+      - run: exit 1
+        continue-on-error: \${{ matrix.experimental }}
+      - uses: actions/cache@v4
+        continue-on-error: true
+        with:
+          key: k
+          path: p
+      - run: exit 1
+        continue-on-error: false
+`);
+    const steps = (await parseWorkflowSteps(filePath, "test", undefined, {
+      experimental: "true",
+    })) as any[];
+    expect(steps.map((s) => s.continueOnError ?? false)).toEqual([true, false, true, true, false]);
+  });
+
+  it("evaluates a false expression to a normal step", async () => {
+    const filePath = writeWorkflowTree(`
+name: Continue on error
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: exit 1
+        continue-on-error: \${{ matrix.experimental }}
+`);
+    const steps = (await parseWorkflowSteps(filePath, "test", undefined, {
+      experimental: "false",
+    })) as any[];
+    expect(steps[0]).not.toHaveProperty("continueOnError");
+  });
+});

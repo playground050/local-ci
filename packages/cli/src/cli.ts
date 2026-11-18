@@ -70,6 +70,9 @@ function printUsage() {
   console.log("  -a, --all                     Discover and run all relevant workflows");
   console.log("  -p, --pause-on-failure         Pause on step failure for interactive debugging");
   console.log(
+    "  --continue-on-error <mode>     With -p: pause (default) or continue on continue-on-error steps",
+  );
+  console.log(
     "  -q, --quiet                   Suppress animated rendering (also enabled by AI_AGENT=1)",
   );
   console.log(

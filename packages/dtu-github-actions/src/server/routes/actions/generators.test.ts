@@ -166,3 +166,26 @@ describe("createJobResponse", () => {
     expect(body.Workspace.Path).toBe("/opt/custom/_work/repo/repo");
   });
 });
+
+describe("createJobResponse — continue-on-error", () => {
+  const step = (extra: Record<string, unknown>) => ({
+    Name: "s",
+    Reference: { Type: "Script" },
+    Inputs: { script: "exit 3" },
+    ...extra,
+  });
+
+  it("passes continueOnError to the runner only for continue-on-error steps", () => {
+    const payload = {
+      id: "1",
+      name: "test-job",
+      githubRepo: "owner/repo",
+      steps: [step({ continueOnError: true }), step({})],
+    };
+    const body = JSON.parse(
+      createJobResponse("1", payload, "http://localhost:3000", "plan-1").Body,
+    );
+    expect(body.Steps[0].continueOnError).toBe(true);
+    expect(body.Steps[1]).not.toHaveProperty("continueOnError");
+  });
+});

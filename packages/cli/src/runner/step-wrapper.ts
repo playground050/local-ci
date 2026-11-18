@@ -54,6 +54,21 @@ while true; do
 done`;
 }
 
+export type ContinueOnErrorMode = "pause" | "continue";
+
+/**
+ * How `continue-on-error: true` steps behave under `--pause-on-failure`:
+ * `pause` (default) pauses on them like any other failing step so they can be
+ * debugged in place; `continue` lets them fail and continue as on GitHub.
+ * Without `--pause-on-failure` they always continue, as on GitHub.
+ * Set with `--continue-on-error <mode>` or `LOCAL_CI_CONTINUE_ON_ERROR`.
+ */
+export function resolveContinueOnErrorMode(
+  value: string | undefined = process.env.LOCAL_CI_CONTINUE_ON_ERROR,
+): ContinueOnErrorMode {
+  return value?.trim().toLowerCase() === "continue" ? "continue" : "pause";
+}
+
 /**
  * Clone a steps array, wrapping `run:` steps when `pauseOnFailure` is enabled.
  *
@@ -64,13 +79,23 @@ done`;
  * Step indices are 1-based across ALL steps (matching the tree UI numbering),
  * not just the `run:` steps.
  */
-export function wrapJobSteps(steps: any[], pauseOnFailure: boolean): any[] {
+export function wrapJobSteps(
+  steps: any[],
+  pauseOnFailure: boolean,
+  options: { pauseContinueOnErrorSteps?: boolean } = {},
+): any[] {
   if (!pauseOnFailure || !steps) {
     return steps;
   }
+  const pauseContinueOnErrorSteps = options.pauseContinueOnErrorSteps ?? true;
 
   return steps.map((step, idx) => {
     if (step?.Reference?.Type !== "Script" || !step?.Inputs?.script) {
+      return step;
+    }
+    // `continue-on-error: true` steps are left to the runner (record the
+    // failure and move on, as on GitHub) when LOCAL_CI_CONTINUE_ON_ERROR=continue.
+    if (step.continueOnError === true && !pauseContinueOnErrorSteps) {
       return step;
     }
     const stepIndex = idx + 1; // 1-based to match UI

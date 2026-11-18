@@ -342,6 +342,13 @@ function parseRunArgs(args: string[]): ParsedRunArgs {
       parsed.prewarmThrough = args[++i];
     } else if (arg.startsWith("--prewarm-through=")) {
       parsed.prewarmThrough = arg.slice("--prewarm-through=".length);
+    } else if (arg === "--continue-on-error" || arg.startsWith("--continue-on-error=")) {
+      const mode = arg.includes("=") ? arg.slice("--continue-on-error=".length) : args[++i];
+      if (mode !== "pause" && mode !== "continue") {
+        exitWithError("[Local CI] Error: --continue-on-error expects pause or continue");
+      }
+      // Read by the job runner (also when the detached launcher re-spawns the CLI).
+      process.env.LOCAL_CI_CONTINUE_ON_ERROR = mode;
     } else if (arg === "--commit-status") {
       parsed.commitStatus = true;
     } else if (arg === "--var" && args[i + 1]) {

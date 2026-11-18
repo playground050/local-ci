@@ -382,8 +382,8 @@
         },
         {
           "key": "`steps[*].continue-on-error`",
-          "status": "unsupported",
-          "notes": "Not implemented — see `jobs.<id>.continue-on-error` above for the reasoning"
+          "status": "supported",
+          "notes": "Passed to the runner, which records a failing step with outcome `failure` / conclusion `success` and keeps running the job, as on GitHub. Expressions (e.g. `${{ matrix.experimental }}`) are evaluated. Under `--pause-on-failure` such steps still pause by default; `--continue-on-error continue` (or `LOCAL_CI_CONTINUE_ON_ERROR=continue`) lets them continue instead."
         },
         {
           "key": "`steps[*].timeout-minutes`",

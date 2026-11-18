@@ -1043,6 +1043,20 @@ export async function parseWorkflowSteps(
         runnerContext,
         githubContext,
       );
+      const continueOnError = resolveContinueOnError(rawStep["continue-on-error"], (value) =>
+        expandExpressions(
+          value,
+          repoPath,
+          secrets,
+          matrixContext,
+          needsContext,
+          inputsContext,
+          vars,
+          runnerContext,
+          stepEnv,
+          githubContext,
+        ),
+      );
 
       // Prefer raw YAML name to preserve ${{ }} expressions for our own expansion.
       // Computed after stepEnv so that env.* references in step names resolve correctly.
@@ -1122,6 +1136,7 @@ export async function parseWorkflowSteps(
           Inputs: inputs,
           Env: stepEnv,
           ...(condition !== undefined ? { condition } : {}),
+          ...(continueOnError ? { continueOnError } : {}),
         };
       } else if ("uses" in step) {
         // Basic support for 'uses' steps.
@@ -1235,6 +1250,7 @@ export async function parseWorkflowSteps(
           },
           Env: stepEnv,
           ...(condition !== undefined ? { condition } : {}),
+          ...(continueOnError ? { continueOnError } : {}),
         };
       }
       return null;
@@ -1728,6 +1744,22 @@ export function parseJobIf(filePath: string, jobId: string): string | null {
     expr = wrapped[1];
   }
   return expr;
+}
+
+/**
+ * Resolve a step's `continue-on-error:` (a boolean or an expression such as
+ * `${{ matrix.experimental }}`) to true/false. The runner applies it, so a
+ * failing step is recorded with outcome `failure` / conclusion `success` and
+ * the job keeps going, as on GitHub.
+ */
+export function resolveContinueOnError(raw: unknown, expand: (value: string) => string): boolean {
+  if (raw === true || raw === false) {
+    return raw;
+  }
+  if (raw === undefined || raw === null) {
+    return false;
+  }
+  return expand(String(raw)).trim().toLowerCase() === "true";
 }
 
 /**

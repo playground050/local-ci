@@ -38,7 +38,11 @@ import {
 } from "../docker/container-config.ts";
 import { buildJobResult, isJobSuccessful, readCapturedStepOutputs } from "./result-builder.ts";
 import { ensureImagePulled, type ImageRegistryCredentials } from "../docker/image-pull.ts";
-import { wrapJobSteps, appendOutputCaptureStep } from "./step-wrapper.ts";
+import {
+  appendOutputCaptureStep,
+  resolveContinueOnErrorMode,
+  wrapJobSteps,
+} from "./step-wrapper.ts";
 import { syncWorkspaceForRetry } from "./sync.ts";
 import {
   discoverRunnerImage,
@@ -741,7 +745,11 @@ export async function executeLocalJob(
         }
       : job.repository;
 
-    const wrappedSteps = pauseOnFailure ? wrapJobSteps(job.steps ?? [], true) : job.steps;
+    const wrappedSteps = pauseOnFailure
+      ? wrapJobSteps(job.steps ?? [], true, {
+          pauseContinueOnErrorSteps: resolveContinueOnErrorMode() === "pause",
+        })
+      : job.steps;
     const seededSteps = appendOutputCaptureStep(wrappedSteps ?? []);
 
     // Pin runnerName so the job goes to the runner-specific pool, not the
