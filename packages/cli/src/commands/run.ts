@@ -1898,15 +1898,21 @@ async function handleWorkflow(options: {
       return undefined;
     }
     const ctx: Record<string, Record<string, string>> = {};
+    // `__result` carries the dependency's actual result for `needs.<id>.result`
+    // now that always()/failure() jobs can run after a failed dependency.
+    const withResult = (id: string, outputs: Record<string, string> | undefined) => {
+      const result = jobResultStatus.get(id);
+      return result ? { ...outputs, __result: result } : { ...outputs };
+    };
     for (const depId of jobDeps) {
-      ctx[depId] = jobOutputs.get(depId) ?? {};
+      ctx[depId] = withResult(depId, jobOutputs.get(depId));
       if (depId.includes("/")) {
         const callerJobId = depId.split("/")[0];
         const calledJobId = depId.split("/").slice(1).join("/");
         // For composite IDs like "lint/setup", also add the called job ID ("setup")
         // so intra-workflow `needs.setup.outputs.*` references resolve correctly
         if (!ctx[calledJobId]) {
-          ctx[calledJobId] = jobOutputs.get(depId) ?? {};
+          ctx[calledJobId] = withResult(depId, jobOutputs.get(depId));
         }
         // If workflow_call outputs were resolved for the caller (e.g. "lint"),
         // add them so downstream `needs.lint.outputs.*` references work
