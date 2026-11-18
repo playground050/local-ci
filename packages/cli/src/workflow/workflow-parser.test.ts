@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import { describe, it, expect, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
@@ -574,15 +575,22 @@ describe("expandExpressions", () => {
     expect(both).not.toBe(justPackage);
   });
 
-  it("hashFiles with no matching files returns zero hash", () => {
+  it("hashFiles with no matching files returns an empty string, as on GitHub", () => {
     const repoDir = makeRepo({ name: "package.json", content: "{}" });
     const result = expandExpressions("${{ hashFiles('nonexistent.txt') }}", repoDir);
-    expect(result).toBe("0000000000000000000000000000000000000000");
+    expect(result).toBe("");
   });
 
-  it("hashFiles without repoPath returns zero hash", () => {
+  it("hashFiles without repoPath returns an empty string", () => {
     const result = expandExpressions("${{ hashFiles('package.json') }}");
-    expect(result).toBe("0000000000000000000000000000000000000000");
+    expect(result).toBe("");
+  });
+
+  it("hashFiles hashes the digest of each file, like the runner", () => {
+    const repoDir = makeRepo({ name: "a.txt", content: "hello" });
+    const fileDigest = crypto.createHash("sha256").update("hello").digest();
+    const expected = crypto.createHash("sha256").update(fileDigest).digest("hex");
+    expect(expandExpressions("${{ hashFiles('a.txt') }}", repoDir)).toBe(expected);
   });
 
   it("hashFiles matches glob patterns", () => {

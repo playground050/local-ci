@@ -179,15 +179,17 @@ function evalArgOrLiteral(inner: string, ctx: ExprContext): string {
 }
 
 function evalHashFiles(rawArgs: string, ctx: ExprContext): string {
+  // Same algorithm as the runner's hashFiles: SHA-256 over the SHA-256 digest
+  // of each matched file (each file once), and an empty string when nothing matches.
   if (!ctx.repoPath) {
-    return ZERO_SHA;
+    return "";
   }
   try {
     // Parse the argument list: quoted strings separated by commas
     const args = rawArgs.match(/['"][^'"]*['"]/g) ?? [];
     const patterns = args.map((a) => a.replace(/^['"]|['"]$/g, ""));
     const hash = crypto.createHash("sha256");
-    let hasAny = false;
+    const seen = new Set<string>();
     for (const pattern of patterns) {
       let files: string[];
       try {
@@ -196,17 +198,20 @@ function evalHashFiles(rawArgs: string, ctx: ExprContext): string {
         files = [];
       }
       for (const f of files.sort()) {
+        if (seen.has(f)) {
+          continue;
+        }
         try {
-          hash.update(fs.readFileSync(f));
-          hasAny = true;
+          hash.update(crypto.createHash("sha256").update(fs.readFileSync(f)).digest());
+          seen.add(f);
         } catch {
           // File not readable, skip
         }
       }
     }
-    return hasAny ? hash.digest("hex") : ZERO_SHA;
+    return seen.size > 0 ? hash.digest("hex") : "";
   } catch {
-    return ZERO_SHA;
+    return "";
   }
 }
 

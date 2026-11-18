@@ -400,7 +400,7 @@
         {
           "key": "`hashFiles(...)`",
           "status": "supported",
-          "notes": "SHA-256 of matching files; supports multiple glob patterns. Descends into dotted directories (e.g. `.github/`) when the pattern asks for them.",
+          "notes": "Same algorithm as the runner: SHA-256 over the SHA-256 of each matching file; empty string when nothing matches. In step `env:`, `run:` and `with:` the runner evaluates it itself. Supports multiple glob patterns and dotted directories (e.g. `.github/`)",
           "proof": [".github/workflows/smoke-expressions.yml"]
         },
         {
