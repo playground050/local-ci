@@ -593,6 +593,10 @@ describe("expandExpressions", () => {
     expect(expandExpressions("${{ hashFiles('a.txt') }}", repoDir)).toBe(expected);
   });
 
+  it("does not end an expression at }} inside a string literal", () => {
+    expect(expandExpressions("${{ format('{0}-{{x}}', 'a') }}!")).toBe("a-{x}!");
+  });
+
   it("hashFiles matches glob patterns", () => {
     const repoDir = makeRepo(
       { name: "src/foo.ts", content: "const x = 1" },

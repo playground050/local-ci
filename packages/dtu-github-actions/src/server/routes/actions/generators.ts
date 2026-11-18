@@ -63,10 +63,6 @@ function toContextData(obj: any): any {
  * folded into `format('text {0} text', expr)`. Plain strings stay StringTokens.
  */
 export function toTemplateTokenValue(v: string): any {
-  const exprMatch = v.match(/^\$\{\{\s*([\s\S]+?)\s*\}\}$/);
-  if (exprMatch && !exprMatch[1].includes("}}")) {
-    return { type: 3, expr: exprMatch[1] };
-  }
   if (!v.includes("${{")) {
     return v;
   }
@@ -75,7 +71,7 @@ export function toTemplateTokenValue(v: string): any {
   let rest = v;
   for (;;) {
     const start = rest.indexOf("${{");
-    const end = start >= 0 ? rest.indexOf("}}", start + 3) : -1;
+    const end = start >= 0 ? findExpressionEnd(rest, start + 3) : -1;
     if (start < 0 || end < 0) {
       template += escapeFormatLiteral(rest);
       break;
@@ -84,7 +80,32 @@ export function toTemplateTokenValue(v: string): any {
     args.push(rest.slice(start + 3, end).trim());
     rest = rest.slice(end + 2);
   }
+  if (template === "{0}") {
+    return { type: 3, expr: args[0] };
+  }
   return { type: 3, expr: `format('${template.replace(/'/g, "''")}', ${args.join(", ")})` };
+}
+
+/** Index of the `}}` closing an expression that starts at `from` (string literals skipped), or -1. */
+function findExpressionEnd(value: string, from: number): number {
+  let inString = false;
+  for (let i = from; i < value.length; i++) {
+    const c = value[i];
+    if (inString) {
+      if (c === "'") {
+        if (value[i + 1] === "'") {
+          i++;
+        } else {
+          inString = false;
+        }
+      }
+    } else if (c === "'") {
+      inString = true;
+    } else if (c === "}" && value[i + 1] === "}") {
+      return i;
+    }
+  }
+  return -1;
 }
 
 /** Escape literal text for a format() template: braces are doubled. */

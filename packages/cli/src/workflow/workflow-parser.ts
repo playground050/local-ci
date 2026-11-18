@@ -274,7 +274,11 @@ function evalFormat(rawArgs: string, ctx: ExprContext): string {
   const formatArgs = splitFunctionArgs(rawArgs);
   const template = unquote(formatArgs[0] || "");
   const args = formatArgs.slice(1);
-  return template.replace(/\{(\d+)\}/g, (_m, idx) => {
+  // `{{` and `}}` are literal braces; `{N}` is the N-th argument.
+  return template.replace(/\{\{|\}\}|\{(\d+)\}/g, (m, idx) => {
+    if (idx === undefined) {
+      return m[0];
+    }
     const i = parseInt(idx, 10);
     return i < args.length ? evaluateExprValue(args[i], ctx) : "";
   });
@@ -724,9 +728,58 @@ export function expandExpressions(
     envContext,
     githubContext,
   };
-  return value.replace(/\$\{\{([\s\S]*?)\}\}/g, (match, expr: string) =>
+  return replaceExpressions(value, (match, expr) =>
     keepRuntimeContexts && runnerCanEvaluate(expr) ? match : evaluateExprValue(expr, ctx),
   );
+}
+
+/**
+ * Replace each `${{ … }}` in a string. The end of an expression is the first
+ * `}}` outside a string literal, so `format('{{x}}')` stays one expression.
+ * An unterminated `${{` is left as it is.
+ */
+export function replaceExpressions(
+  value: string,
+  replace: (match: string, expr: string) => string,
+): string {
+  let out = "";
+  let pos = 0;
+  for (;;) {
+    const start = value.indexOf("${{", pos);
+    if (start < 0) {
+      break;
+    }
+    const end = findExpressionEnd(value, start + 3);
+    if (end < 0) {
+      break;
+    }
+    out +=
+      value.slice(pos, start) + replace(value.slice(start, end + 2), value.slice(start + 3, end));
+    pos = end + 2;
+  }
+  return out + value.slice(pos);
+}
+
+/** Index of the `}}` that closes an expression starting at `from`, or -1. */
+function findExpressionEnd(value: string, from: number): number {
+  let inString = false;
+  for (let i = from; i < value.length; i++) {
+    const c = value[i];
+    if (inString) {
+      if (c === "'") {
+        if (value[i + 1] === "'") {
+          i++;
+        } else {
+          inString = false;
+        }
+      }
+    } else if (c === "'") {
+      inString = true;
+    } else if (c === "}" && value[i + 1] === "}") {
+      return i;
+    }
+  }
+  return -1;
 }
 
 // Contexts the runner has while the job runs. `steps` and `job` exist only
