@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createJobResponse } from "./generators.ts";
+import { createJobResponse, toTemplateTokenValue } from "./generators.ts";
 
 describe("createJobResponse", () => {
   const basePayload = {
@@ -223,5 +223,57 @@ describe("createJobResponse — continue-on-error", () => {
     );
     expect(body.Steps[0].continueOnError).toBe(true);
     expect(body.Steps[1]).not.toHaveProperty("continueOnError");
+  });
+});
+
+describe("toTemplateTokenValue", () => {
+  it("keeps plain strings as strings", () => {
+    expect(toTemplateTokenValue("echo hi {x}")).toBe("echo hi {x}");
+  });
+
+  it("encodes a whole-value expression as a basic expression", () => {
+    expect(toTemplateTokenValue("${{ steps.build.outputs.version }}")).toEqual({
+      type: 3,
+      expr: "steps.build.outputs.version",
+    });
+  });
+
+  it("folds text around expressions into format(), escaping braces and quotes", () => {
+    expect(toTemplateTokenValue("echo '${{ steps.a.outputs.v }}' {x} ${{ job.status }}")).toEqual({
+      type: 3,
+      expr: "format('echo ''{0}'' {{x}} {1}', steps.a.outputs.v, job.status)",
+    });
+  });
+
+  it("is used for run scripts and step env so the runner evaluates them", () => {
+    const body = JSON.parse(
+      createJobResponse(
+        "1",
+        {
+          id: "1",
+          name: "t",
+          githubRepo: "o/r",
+          steps: [
+            {
+              Name: "s",
+              Reference: { Type: "Script" },
+              Inputs: { script: "echo ${{ steps.a.outputs.v }}" },
+              Env: { V: "${{ steps.a.outputs.v }}" },
+            },
+          ],
+        },
+        "http://localhost:3000",
+        "plan-1",
+      ).Body,
+    );
+    const step = body.Steps[0];
+    expect(step.inputs.map.find((e: any) => e.Key === "script").Value).toEqual({
+      type: 3,
+      expr: "format('echo {0}', steps.a.outputs.v)",
+    });
+    expect(step.environment.map.find((e: any) => e.Key === "V").Value).toEqual({
+      type: 3,
+      expr: "steps.a.outputs.v",
+    });
   });
 });

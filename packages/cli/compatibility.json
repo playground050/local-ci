@@ -323,8 +323,8 @@
         },
         {
           "key": "`steps[*].if`",
-          "status": "partial",
-          "notes": "The condition is passed to the official runner binary, which evaluates it at runtime. Limitation: `steps.*.outputs.cache-hit` and similar outputs resolve to an empty string at parse time because prior steps have not yet run when the workflow is parsed",
+          "status": "supported",
+          "notes": "The condition is passed to the official runner binary, which evaluates it at runtime with the live `steps` and `job` contexts.",
           "proof": [".github/workflows/smoke-artifacts.yml"]
         },
         {
@@ -488,19 +488,19 @@
         },
         {
           "key": "`steps.*.outputs.*`",
-          "status": "partial",
-          "notes": "Always resolves to an empty string at parse time — the producing step has not run yet and the runner does not re-evaluate `${{ }}` inside `run:` script bodies. Use `needs.*.outputs.*` for cross-job values instead.",
+          "status": "supported",
+          "notes": "Expressions that read `steps` (or `job`) are left in place and evaluated by the runner while the job runs, as on GitHub — in `run:` scripts, step `env:` and `with:` values. Step names are expanded before the job starts, so `steps.*` there is empty.",
           "proof": [".github/workflows/smoke-artifacts.yml"]
         },
         {
           "key": "`steps.*.conclusion` / `steps.*.outcome`",
-          "status": "unsupported",
-          "notes": "Step result states are not exposed — neither `conclusion` nor `outcome` resolves against a meaningful value. Workflows that branch on prior-step status via these context variables will always evaluate as if the step didn't produce a result."
+          "status": "supported",
+          "notes": "Evaluated by the runner at run time (see `steps.*.outputs.*`), including in step `if:` conditions."
         },
         {
           "key": "`job.*` (`job.status`, `job.container.id`, `job.services.*`)",
-          "status": "unsupported",
-          "notes": "The per-job runtime context is not populated. Expressions that read `job.status` etc. resolve to empty strings."
+          "status": "supported",
+          "notes": "Evaluated by the runner at run time in `run:` scripts, step `env:`, `with:` and step `if:`."
         },
         {
           "key": "`*` object-filter operator",

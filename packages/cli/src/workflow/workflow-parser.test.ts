@@ -7,6 +7,7 @@ import {
   parseMergedJobEnv,
   parseWorkflowContainer,
   parseWorkflowServices,
+  referencesRuntimeContext,
 } from "./workflow-parser.ts";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -2894,5 +2895,80 @@ jobs:
       experimental: "false",
     })) as any[];
     expect(steps[0]).not.toHaveProperty("continueOnError");
+  });
+});
+
+describe("steps / job contexts are left for the runner", () => {
+  it("detects references to the steps and job contexts", () => {
+    expect(referencesRuntimeContext("steps.build.outputs.version")).toBe(true);
+    expect(referencesRuntimeContext("job.status")).toBe(true);
+    expect(referencesRuntimeContext("toJSON(steps)")).toBe(true);
+    expect(referencesRuntimeContext("steps['my-step'].outcome == 'failure'")).toBe(true);
+    expect(referencesRuntimeContext("!cancelled() && job.status == 'success'")).toBe(true);
+    expect(referencesRuntimeContext("github.job")).toBe(false);
+    expect(referencesRuntimeContext("needs.job.outputs.x")).toBe(false);
+    expect(referencesRuntimeContext("matrix.steps")).toBe(false);
+    expect(referencesRuntimeContext("format('job {0}', github.sha)")).toBe(false);
+    expect(referencesRuntimeContext("inputs.my-steps")).toBe(false);
+  });
+
+  it("keeps steps/job expressions and expands the rest when asked", () => {
+    const out = expandExpressions(
+      "v=${{ steps.build.outputs.version }} on ${{ runner.os }} (${{ job.status }})",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { os: "Linux", arch: "X64" },
+      undefined,
+      undefined,
+      true,
+    );
+    expect(out).toBe("v=${{ steps.build.outputs.version }} on Linux (${{ job.status }})");
+    // Default behaviour (e.g. step names) is unchanged.
+    expect(expandExpressions("hit-${{ steps.cache.outputs.cache-hit }}")).toBe("hit-");
+  });
+
+  it("keeps them in run scripts, env and with values of parsed steps", async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "oa-runtime-ctx-"));
+    try {
+      const dir = path.join(tmp, ".github", "workflows");
+      fs.mkdirSync(dir, { recursive: true });
+      const filePath = path.join(dir, "test.yml");
+      fs.writeFileSync(
+        filePath,
+        `
+name: Runtime contexts
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - id: build
+        run: echo "version=1.2.3" >> "$GITHUB_OUTPUT"
+      - name: use \${{ steps.build.outputs.version }}
+        env:
+          VERSION: \${{ steps.build.outputs.version }}
+          OUTCOME: \${{ steps.build.outcome }}/\${{ job.status }}
+        run: echo "\${{ steps.build.outputs.version }} $VERSION"
+      - uses: actions/cache@v4
+        with:
+          key: deps-\${{ steps.build.outputs.version }}
+          path: p
+`,
+      );
+      const steps = (await parseWorkflowSteps(filePath, "test")) as any[];
+      expect(steps[1].Inputs.script).toBe('echo "${{ steps.build.outputs.version }} $VERSION"');
+      expect(steps[1].Env).toMatchObject({
+        VERSION: "${{ steps.build.outputs.version }}",
+        OUTCOME: "${{ steps.build.outcome }}/${{ job.status }}",
+      });
+      expect(steps[1].Name).toBe("use ");
+      expect(steps[2].Inputs.key).toBe("deps-${{ steps.build.outputs.version }}");
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

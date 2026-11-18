@@ -662,6 +662,7 @@ export function expandExpressions(
   runnerContext?: RunnerContext,
   envContext?: Record<string, string>,
   githubContext?: Record<string, string>,
+  keepRuntimeContexts = false,
 ): string {
   const ctx: ExprContext = {
     repoPath,
@@ -674,9 +675,20 @@ export function expandExpressions(
     envContext,
     githubContext,
   };
-  return value.replace(/\$\{\{([\s\S]*?)\}\}/g, (_match, expr: string) =>
-    evaluateExprValue(expr, ctx),
+  return value.replace(/\$\{\{([\s\S]*?)\}\}/g, (match, expr: string) =>
+    keepRuntimeContexts && referencesRuntimeContext(expr) ? match : evaluateExprValue(expr, ctx),
   );
+}
+
+// `steps` and `job` only exist while the job runs. References to them (outside
+// string literals, and not as a property such as `github.job`) must be left for
+// the runner to evaluate.
+const RUNTIME_CONTEXT_RE = /(^|[^\w.-])(steps|job)\b(?!-)/;
+
+/** Whether an expression reads the `steps` or `job` context. */
+export function referencesRuntimeContext(expr: string): boolean {
+  const withoutStrings = expr.replace(/'(?:[^']|'')*'/g, "''");
+  return RUNTIME_CONTEXT_RE.test(withoutStrings);
 }
 
 function toStringRecord(value: unknown): Record<string, string> {
@@ -967,6 +979,7 @@ function buildStepEnv(
           runnerContext,
           envContext,
           githubContext,
+          true,
         ),
       ]),
     );
@@ -1098,6 +1111,7 @@ export async function parseWorkflowSteps(
         // (e.g. dropping the text after an embedded ${{ }} boundary). The raw YAML
         // string is always the complete literal block scalar.
         const rawScript = rawStep.run != null ? String(rawStep.run) : step.run.toString();
+        // steps.* / job.* stay as ${{ }} and are evaluated by the runner at run time.
         const expandedScript = expandExpressions(
           rawScript,
           repoPath,
@@ -1109,6 +1123,7 @@ export async function parseWorkflowSteps(
           runnerContext,
           stepEnv,
           githubContext,
+          true,
         );
         const shell = resolveStepRunDefault(rawYaml, rawJob, rawStep, "shell");
         const inputs: Record<string, string> = {
@@ -1195,6 +1210,7 @@ export async function parseWorkflowSteps(
                       runnerContext,
                       stepEnv,
                       githubContext,
+                      true,
                     ),
                   ]),
                 )
@@ -1214,6 +1230,7 @@ export async function parseWorkflowSteps(
                   runnerContext,
                   stepEnv,
                   githubContext,
+                  true,
                 ),
               ]),
             ),

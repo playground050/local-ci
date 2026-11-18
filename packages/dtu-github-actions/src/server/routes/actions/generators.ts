@@ -55,16 +55,41 @@ function toContextData(obj: any): any {
 // Strings without file/line/col are serialized as bare string values.
 /**
  * Convert a string value to the appropriate TemplateToken.
- * If the value is a pure `${{ expr }}` expression, encode it as a
- * BasicExpressionToken (type 6) so the runner evaluates it at execution time.
- * Otherwise, return a bare string (StringToken).
+ *
+ * Values with `${{ }}` become a BasicExpressionToken (type 3) that the runner
+ * evaluates while the job runs — needed for `steps.*` / `job.*`, which only
+ * exist at run time (Local CI expands every other context before the job
+ * starts). Like GitHub's own workflow parser, text around expressions is
+ * folded into `format('text {0} text', expr)`. Plain strings stay StringTokens.
  */
-function toTemplateTokenValue(v: string): any {
+export function toTemplateTokenValue(v: string): any {
   const exprMatch = v.match(/^\$\{\{\s*([\s\S]+?)\s*\}\}$/);
-  if (exprMatch) {
+  if (exprMatch && !exprMatch[1].includes("}}")) {
     return { type: 3, expr: exprMatch[1] };
   }
-  return v;
+  if (!v.includes("${{")) {
+    return v;
+  }
+  const args: string[] = [];
+  let template = "";
+  let rest = v;
+  for (;;) {
+    const start = rest.indexOf("${{");
+    const end = start >= 0 ? rest.indexOf("}}", start + 3) : -1;
+    if (start < 0 || end < 0) {
+      template += escapeFormatLiteral(rest);
+      break;
+    }
+    template += escapeFormatLiteral(rest.slice(0, start)) + `{${args.length}}`;
+    args.push(rest.slice(start + 3, end).trim());
+    rest = rest.slice(end + 2);
+  }
+  return { type: 3, expr: `format('${template.replace(/'/g, "''")}', ${args.join(", ")})` };
+}
+
+/** Escape literal text for a format() template: braces are doubled. */
+function escapeFormatLiteral(text: string): string {
+  return text.replace(/\{/g, "{{").replace(/\}/g, "}}");
 }
 
 function toTemplateTokenMapping(obj: { [key: string]: string }): object {
