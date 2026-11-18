@@ -39,6 +39,10 @@ import {
   parseStrategySettings,
   expandMatrixCombinations,
   expandMatrixValues,
+  isExpressionMatrix,
+  matrixNeedsDependencies,
+  parseRawMatrix,
+  resolveMatrixDefinition,
   collapseMatrixToSingle,
   isWorkflowRelevant,
   getChangedFiles,
@@ -77,7 +81,12 @@ import { RunStateStore } from "../output/run-state.ts";
 import { renderRunState } from "../output/state-renderer.ts";
 import { isAgentMode, isJsonMode, setJsonMode, setQuietMode } from "../output/agent-mode.ts";
 import { createDiffRenderer } from "../output/diff-renderer.ts";
-import { createFailedJobResult, wrapJobError, isJobError } from "../runner/job-result.ts";
+import {
+  createFailedJobResult,
+  getErrorMessage,
+  wrapJobError,
+  isJobError,
+} from "../runner/job-result.ts";
 import { postCommitStatus } from "../commit-status.ts";
 import {
   classifyJobResources,
@@ -1329,66 +1338,96 @@ type ExpandedJob = {
   classification?: ResourceFidelity;
   classificationSummary?: string;
   classificationReasons?: string[];
+  /**
+   * `strategy.matrix` written with `${{ }}` over `needs.*` (e.g. `fromJSON(needs.a.outputs.list)`):
+   * the combinations are only known once the dependencies finish, so this job is a
+   * placeholder until its wave starts.
+   */
+  deferredMatrix?: unknown;
+  /** The placeholder was replaced by its matrix combinations (appended to the job list). */
+  replacedByLegs?: boolean;
+  /** The matrix could not be built (e.g. not an array); the job fails with this message. */
+  matrixError?: string;
 };
 
 /**
  * Expand each reusable-job entry into one ExpandedJob per matrix combination,
  * or a single ExpandedJob when the entry has no matrix. `nextRunnerName`
  * assigns the deterministic `local-ci-<run>-jN[-mM]` runner id.
+ *
+ * Matrices written with expressions are resolved here with `expandStatic`
+ * (vars, github), except those reading `needs.*`: they stay a single
+ * placeholder job (`deferredMatrix`) until their dependencies have run.
  */
 async function expandJobs(
   expandedEntries: ExpandedJobEntry[],
   noMatrix: boolean,
   nextRunnerName: (matrixContext?: Record<string, string>) => string,
+  expandStatic: (value: string) => string,
 ): Promise<ExpandedJob[]> {
   const out: ExpandedJob[] = [];
   for (const entry of expandedEntries) {
-    const matrixDef = await parseMatrixDef(entry.workflowPath, entry.sourceTaskName);
-    if (!matrixDef) {
-      out.push({
-        workflowPath: entry.workflowPath,
-        taskName: entry.id,
-        sourceTaskName: entry.sourceTaskName,
-        runnerName: nextRunnerName(),
-        inputs: entry.inputs,
-        inputDefaults: entry.inputDefaults,
-        workflowCallOutputDefs: entry.workflowCallOutputDefs,
-        callerJobId: entry.callerJobId,
-      });
+    const base: Omit<ExpandedJob, "runnerName"> = {
+      workflowPath: entry.workflowPath,
+      taskName: entry.id,
+      sourceTaskName: entry.sourceTaskName,
+      inputs: entry.inputs,
+      inputDefaults: entry.inputDefaults,
+      workflowCallOutputDefs: entry.workflowCallOutputDefs,
+      callerJobId: entry.callerJobId,
+    };
+    const raw = parseRawMatrix(entry.workflowPath, entry.sourceTaskName);
+    if (matrixNeedsDependencies(raw)) {
+      out.push({ ...base, runnerName: nextRunnerName(), deferredMatrix: raw });
       continue;
     }
-    const combos = noMatrix
-      ? collapseMatrixToSingle(matrixDef)
-      : expandMatrixCombinations(matrixDef);
-    // Typed values (booleans, numbers) for the matrix context the runner sees.
-    const typedCombos = expandMatrixValues(matrixDef);
-    const total = combos.length;
-    const strategy = parseStrategySettings(entry.workflowPath, entry.sourceTaskName, total);
-    for (let ci = 0; ci < combos.length; ci++) {
-      const matrixContext = noMatrix
-        ? combos[ci]
-        : {
-            ...combos[ci],
-            __job_total: String(total),
-            __job_index: String(ci),
-            __fail_fast: String(strategy.failFast),
-            __max_parallel: String(strategy.maxParallel),
-            __matrix_json: JSON.stringify(typedCombos[ci] ?? {}),
-          };
-      out.push({
-        workflowPath: entry.workflowPath,
-        taskName: entry.id,
-        sourceTaskName: entry.sourceTaskName,
-        runnerName: nextRunnerName(matrixContext),
-        matrixContext,
-        inputs: entry.inputs,
-        inputDefaults: entry.inputDefaults,
-        workflowCallOutputDefs: entry.workflowCallOutputDefs,
-        callerJobId: entry.callerJobId,
-      });
+    let matrixDef = await parseMatrixDef(entry.workflowPath, entry.sourceTaskName);
+    if (isExpressionMatrix(raw)) {
+      try {
+        matrixDef = resolveMatrixDefinition(raw, expandStatic);
+      } catch (err) {
+        out.push({ ...base, runnerName: nextRunnerName(), matrixError: getErrorMessage(err) });
+        continue;
+      }
     }
+    if (!matrixDef) {
+      out.push({ ...base, runnerName: nextRunnerName() });
+      continue;
+    }
+    out.push(...matrixLegs(base, matrixDef, noMatrix, nextRunnerName));
   }
   return out;
+}
+
+/** One ExpandedJob per combination of `matrixDef` (or a single one under --no-matrix). */
+function matrixLegs(
+  base: Omit<ExpandedJob, "runnerName">,
+  matrixDef: Record<string, any[]>,
+  noMatrix: boolean,
+  nameFor: (matrixContext: Record<string, string>) => string,
+): ExpandedJob[] {
+  const combos = noMatrix ? collapseMatrixToSingle(matrixDef) : expandMatrixCombinations(matrixDef);
+  // Typed values (booleans, numbers) for the matrix context the runner sees.
+  const typedCombos = expandMatrixValues(matrixDef);
+  const total = combos.length;
+  const strategy = parseStrategySettings(
+    base.workflowPath,
+    base.sourceTaskName ?? base.taskName,
+    total,
+  );
+  return combos.map((combo, ci) => {
+    const matrixContext = noMatrix
+      ? combo
+      : {
+          ...combo,
+          __job_total: String(total),
+          __job_index: String(ci),
+          __fail_fast: String(strategy.failFast),
+          __max_parallel: String(strategy.maxParallel),
+          __matrix_json: JSON.stringify(typedCombos[ci] ?? {}),
+        };
+    return { ...base, runnerName: nameFor(matrixContext), matrixContext };
+  });
 }
 
 /**
@@ -1546,7 +1585,20 @@ async function handleWorkflow(options: {
     return `local-ci-${baseRunNum}${suffix}`;
   };
 
-  const expandedJobs = await expandJobs(expandedEntries, noMatrix, nextRunnerName);
+  const expandedJobs = await expandJobs(expandedEntries, noMatrix, nextRunnerName, (value) =>
+    expandExpressions(
+      value,
+      repoRoot,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      vars,
+      undefined,
+      undefined,
+      workflowGithubContext,
+    ),
+  );
 
   // Pre-register all jobs so they appear as "queued" in the render loop
   // before execution starts. Uses the same naming convention as buildJob.
@@ -1554,6 +1606,9 @@ async function handleWorkflow(options: {
   if (expandedJobs.length > 1 && options.baseRunNum != null) {
     for (let i = 0; i < expandedJobs.length; i++) {
       const ej = expandedJobs[i];
+      if (ej.deferredMatrix !== undefined) {
+        continue; // registered once its matrix combinations are known
+      }
       let suffix = `-j${i + 1}`;
       if (ej.matrixContext) {
         const shardIdx = parseInt(ej.matrixContext.__job_index ?? "0", 10) + 1;
@@ -1638,6 +1693,15 @@ async function handleWorkflow(options: {
     const osSkip = maybeSkipUnsupportedOS(ej);
     if (osSkip) {
       return [osSkip];
+    }
+    if (ej.matrixError) {
+      return [
+        createFailedJobResult(
+          ej.taskName,
+          ej.workflowPath,
+          new Error(`Invalid strategy.matrix: ${ej.matrixError}`),
+        ),
+      ];
     }
     const actualTaskName = ej.sourceTaskName ?? ej.taskName;
     const requiredRefs = extractSecretRefs(ej.workflowPath, actualTaskName);
@@ -2027,6 +2091,14 @@ async function handleWorkflow(options: {
       jobResultStatus.set(ej.taskName, "skipped");
       return osSkip;
     }
+    if (ej.matrixError) {
+      jobResultStatus.set(ej.taskName, "failure");
+      return createFailedJobResult(
+        ej.taskName,
+        ej.workflowPath,
+        new Error(`Invalid strategy.matrix: ${ej.matrixError}`),
+      );
+    }
     if (shouldSkipJob(ej.taskName, ej)) {
       debugCli(`Skipping ${ej.taskName} (if: condition is false)`);
       const result = skippedResult(ej);
@@ -2048,11 +2120,73 @@ async function handleWorkflow(options: {
     return result;
   };
 
+  /**
+   * Build the matrix of jobs whose `strategy.matrix` reads `needs.*` now that
+   * their dependencies have finished, as GitHub does. The placeholder stays in
+   * the list (so runner ids of other jobs do not move) and the combinations are
+   * appended. Jobs that will be skipped anyway keep the placeholder.
+   */
+  const expandDeferredMatrices = async (waveJobIds: Set<string>) => {
+    const placeholders = expandedJobs.filter(
+      (j) => waveJobIds.has(j.taskName) && j.deferredMatrix !== undefined && !j.replacedByLegs,
+    );
+    for (const placeholder of placeholders) {
+      const raw = placeholder.deferredMatrix;
+      placeholder.deferredMatrix = undefined;
+      if (shouldSkipJob(placeholder.taskName, placeholder)) {
+        continue;
+      }
+      const needsCtx = buildNeedsContext(placeholder.taskName);
+      let legs: ExpandedJob[];
+      try {
+        const matrixDef = resolveMatrixDefinition(raw, (value) =>
+          expandExpressions(
+            value,
+            repoRoot,
+            undefined,
+            undefined,
+            needsCtx,
+            undefined,
+            vars,
+            undefined,
+            undefined,
+            workflowGithubContext,
+          ),
+        );
+        const { deferredMatrix: _d, replacedByLegs: _r, matrixError: _e, ...base } = placeholder;
+        legs = matrixLegs(base, matrixDef, noMatrix, (ctx) => {
+          const shard = Number.parseInt(ctx.__job_index ?? "0", 10) + 1;
+          return `${placeholder.runnerName}-m${shard}`;
+        });
+      } catch (err) {
+        placeholder.matrixError = getErrorMessage(err);
+        continue;
+      }
+      placeholder.replacedByLegs = true;
+      expandedJobs.push(...legs);
+      await classifyJobsResources(legs, workflowPath, getHostResources());
+      if (options.baseRunNum != null) {
+        for (const leg of legs) {
+          const storeWfPath = leg.callerJobId ? workflowPath : leg.workflowPath;
+          // Same naming as buildJob: position in expandedJobs plus the matrix shard.
+          const shard = Number.parseInt(leg.matrixContext?.__job_index ?? "0", 10) + 1;
+          const runnerId = `local-ci-${options.baseRunNum}-j${expandedJobs.indexOf(leg) + 1}-m${shard}`;
+          store.addJob(storeWfPath, leg.taskName, runnerId, {
+            matrixValues: Object.fromEntries(
+              Object.entries(leg.matrixContext ?? {}).filter(([k]) => !k.startsWith("__")),
+            ),
+          });
+        }
+      }
+    }
+  };
+
   const seenErrorMessages = new Set<string>();
 
   for (let wi = 0; wi < filteredWaves.length; wi++) {
     const waveJobIds = new Set(filteredWaves[wi]);
-    const waveJobs = expandedJobs.filter((j) => waveJobIds.has(j.taskName));
+    await expandDeferredMatrices(waveJobIds);
+    const waveJobs = expandedJobs.filter((j) => waveJobIds.has(j.taskName) && !j.replacedByLegs);
 
     if (waveJobs.length === 0) {
       continue;

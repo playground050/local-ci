@@ -910,6 +910,69 @@ export function expandMatrixValues(matrixDef: Record<string, any[]>): Record<str
   return all.length > 0 ? all : [{}];
 }
 
+/** The raw `strategy.matrix` value of a job (object, expression string, or undefined). */
+export function parseRawMatrix(filePath: string, jobId: string): unknown {
+  try {
+    return parseYaml(fs.readFileSync(filePath, "utf8"))?.jobs?.[jobId]?.strategy?.matrix;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Whether a matrix (or one of its values) is written as a `${{ }}` expression. */
+export function isExpressionMatrix(raw: unknown): boolean {
+  if (typeof raw === "string") {
+    return raw.includes("${{");
+  }
+  return (
+    isPlainObject(raw) && Object.values(raw).some((v) => typeof v === "string" && v.includes("${{"))
+  );
+}
+
+/** Whether an expression matrix reads `needs.*`, i.e. can only be built once dependencies finish. */
+export function matrixNeedsDependencies(raw: unknown): boolean {
+  return isExpressionMatrix(raw) && /\bneeds\./.test(JSON.stringify(raw));
+}
+
+/**
+ * Turn a matrix written with expressions — `matrix: ${{ fromJSON(...) }}` or
+ * `matrix: { os: ${{ fromJSON(...) }} }` — into a plain matrix definition.
+ * `expand` evaluates `${{ }}` in a string (with needs / vars / inputs).
+ * Throws with GitHub-like messages when a value is not an array.
+ */
+export function resolveMatrixDefinition(
+  raw: unknown,
+  expand: (value: string) => string,
+): Record<string, any[]> {
+  const parse = (text: string, what: string): unknown => {
+    const value = expand(text);
+    try {
+      return JSON.parse(value);
+    } catch {
+      throw new Error(`${what} must evaluate to JSON, got ${JSON.stringify(value)}`);
+    }
+  };
+  const matrix = typeof raw === "string" ? parse(raw, "strategy.matrix") : raw;
+  if (!isPlainObject(matrix)) {
+    throw new Error("strategy.matrix must evaluate to an object");
+  }
+  const out: Record<string, any[]> = {};
+  for (const [key, value] of Object.entries(matrix)) {
+    const resolved =
+      typeof value === "string" && value.includes("${{")
+        ? parse(value, `strategy.matrix.${key}`)
+        : value;
+    if (!Array.isArray(resolved)) {
+      throw new Error(`strategy.matrix.${key} must be an array`);
+    }
+    if (resolved.length === 0 && key !== "include" && key !== "exclude") {
+      throw new Error(`Matrix vector '${key}' does not contain any values`);
+    }
+    out[key] = resolved;
+  }
+  return out;
+}
+
 /**
  * Read the `strategy.matrix` object for a given job from the raw YAML.
  * Returns null if the job has no matrix.

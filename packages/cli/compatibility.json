@@ -278,7 +278,7 @@
         {
           "key": "`strategy.matrix`",
           "status": "supported",
-          "notes": "Cartesian product of all array values is fully expanded",
+          "notes": "Cartesian product of all array values is fully expanded. Matrices written with expressions — `matrix: ${{ fromJSON(...) }}` or a key such as `os: ${{ fromJSON(needs.setup.outputs.os) }}` — are evaluated too; when they read `needs.*`, the combinations are built once the dependencies have finished, as on GitHub.",
           "proof": [".github/workflows/smoke-matrix.yml"]
         },
         {

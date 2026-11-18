@@ -7,6 +7,9 @@ import {
   expandExpressions,
   expandMatrixCombinations,
   expandMatrixValues,
+  isExpressionMatrix,
+  matrixNeedsDependencies,
+  resolveMatrixDefinition,
   parseStrategySettings,
 } from "./workflow-parser.ts";
 
@@ -154,5 +157,57 @@ describe("expandMatrixValues", () => {
         include: [{ experimental: true, node: 24 }],
       }),
     ).toEqual([{ experimental: false }, { experimental: true, node: 24 }]);
+  });
+});
+
+describe("matrices written with expressions", () => {
+  const expandWith = (needs: Record<string, Record<string, string>>) => (value: string) =>
+    expandExpressions(value, undefined, undefined, undefined, needs);
+
+  it("detects expression matrices and whether they need dependencies", () => {
+    const perKey = { color: "${{ fromJSON(needs.src.outputs.colors) }}", size: ["s"] };
+    expect(isExpressionMatrix(perKey)).toBe(true);
+    expect(matrixNeedsDependencies(perKey)).toBe(true);
+    expect(isExpressionMatrix("${{ fromJSON(vars.MATRIX) }}")).toBe(true);
+    expect(matrixNeedsDependencies("${{ fromJSON(vars.MATRIX) }}")).toBe(false);
+    expect(isExpressionMatrix({ a: [1, 2] })).toBe(false);
+    expect(isExpressionMatrix(undefined)).toBe(false);
+  });
+
+  it("resolves per-key expressions from needs outputs", () => {
+    const def = resolveMatrixDefinition(
+      { color: "${{ fromJSON(needs.src.outputs.colors) }}", size: ["s"] },
+      expandWith({ src: { colors: '["red","blue"]' } }),
+    );
+    expect(def).toEqual({ color: ["red", "blue"], size: ["s"] });
+    expect(expandMatrixCombinations(def)).toEqual([
+      { color: "red", size: "s" },
+      { color: "blue", size: "s" },
+    ]);
+  });
+
+  it("resolves a whole-matrix expression, including include entries", () => {
+    const def = resolveMatrixDefinition(
+      "${{ fromJSON(needs.src.outputs.matrix) }}",
+      expandWith({
+        src: { matrix: JSON.stringify({ include: [{ dir: "a" }, { dir: "b", deep: true }] }) },
+      }),
+    );
+    expect(expandMatrixValues(def)).toEqual([{ dir: "a" }, { dir: "b", deep: true }]);
+  });
+
+  it("rejects values that are not arrays or are empty, like GitHub", () => {
+    expect(() =>
+      resolveMatrixDefinition(
+        { color: "${{ needs.src.outputs.colors }}" },
+        expandWith({ src: { colors: "red" } }),
+      ),
+    ).toThrow(/must evaluate to JSON/);
+    expect(() =>
+      resolveMatrixDefinition(
+        { color: "${{ fromJSON(needs.src.outputs.colors) }}" },
+        expandWith({ src: { colors: "[]" } }),
+      ),
+    ).toThrow(/does not contain any values/);
   });
 });
