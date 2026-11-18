@@ -242,7 +242,7 @@
         {
           "key": "`jobs.<id>.services`",
           "status": "supported",
-          "notes": "Sidecar containers with image, env, ports, and options",
+          "notes": "Sidecar containers with image, env, ports, and options. `ports` accepts `6379` (Docker picks the host port), `8080:80` and `/udp`; inside the job each TCP port is reachable at `localhost:<container port>` (as on GitHub, the service name does not resolve from a job without `container:`). `job.services.*` is empty locally",
           "proof": [".github/workflows/smoke-artifacts.yml"]
         },
         {

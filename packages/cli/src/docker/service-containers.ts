@@ -96,6 +96,22 @@ async function waitForHealth(
  * *before* launching concurrent runners. Pruning inside this function would
  * race with sibling runners that have already created their networks.
  */
+/**
+ * Parse a service `ports:` entry: `6379` (container port only; Docker picks the
+ * host port), `8080:80`, `127.0.0.1:8080:80`, optionally with `/tcp` or `/udp`.
+ */
+export function parsePortMapping(mapping: string | number): {
+  hostPort: string;
+  containerPort: string;
+  protocol: string;
+} {
+  const [spec, protocol = "tcp"] = String(mapping).trim().split("/");
+  const parts = spec.split(":");
+  const containerPort = parts[parts.length - 1];
+  const hostPort = parts.length >= 2 ? parts[parts.length - 2] : "";
+  return { hostPort, containerPort, protocol: protocol.toLowerCase() };
+}
+
 export async function startServiceContainers(
   docker: Docker,
   services: WorkflowService[],
@@ -126,9 +142,10 @@ export async function startServiceContainers(
     const exposedPorts: Record<string, Record<string, never>> = {};
 
     for (const portMapping of svc.ports ?? []) {
-      const [hostPort, containerPort] = portMapping.split(":");
-      const key = `${containerPort}/tcp`;
+      const { hostPort, containerPort, protocol } = parsePortMapping(portMapping);
+      const key = `${containerPort}/${protocol}`;
       exposedPorts[key] = {};
+      // An empty HostPort lets Docker pick a free port, like `ports: [6379]` on GitHub.
       portBindings[key] = [{ HostPort: hostPort }];
     }
 
@@ -177,8 +194,10 @@ export async function startServiceContainers(
     // Build port-forward commands so localhost:<port> inside the runner reaches the service.
     // Uses the service container's Docker-network hostname (its container name).
     for (const portMapping of svc.ports ?? []) {
-      const [hostPort, containerPort] = portMapping.split(":");
-      const fwdPort = containerPort || hostPort;
+      const { containerPort: fwdPort, protocol } = parsePortMapping(portMapping);
+      if (protocol !== "tcp") {
+        continue;
+      }
       // Python TCP forwarder (same pattern used for DTU forwarding in local-job.ts)
       portForwards.push(
         `sudo -n python3 -c "

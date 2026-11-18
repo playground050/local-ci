@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  parsePortMapping,
   startServiceContainers,
   cleanupServiceContainers,
   parseHealthCheck,
@@ -332,5 +333,33 @@ describe("cleanupServiceContainers", () => {
 
     expect(lines.some((l) => l.includes("Cleaned up"))).toBe(true);
     expect(lines.some((l) => l.includes("local-ci-net-test"))).toBe(true);
+  });
+});
+
+describe("parsePortMapping", () => {
+  it("leaves the host port to Docker for a container port alone", () => {
+    expect(parsePortMapping("6379")).toEqual({
+      hostPort: "",
+      containerPort: "6379",
+      protocol: "tcp",
+    });
+    expect(parsePortMapping(6379)).toEqual({
+      hostPort: "",
+      containerPort: "6379",
+      protocol: "tcp",
+    });
+  });
+
+  it("reads host:container, an address and a protocol", () => {
+    expect(parsePortMapping("8080:80")).toEqual({
+      hostPort: "8080",
+      containerPort: "80",
+      protocol: "tcp",
+    });
+    expect(parsePortMapping("127.0.0.1:8080:80/udp")).toEqual({
+      hostPort: "8080",
+      containerPort: "80",
+      protocol: "udp",
+    });
   });
 });
