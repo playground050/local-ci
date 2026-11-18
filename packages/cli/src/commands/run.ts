@@ -699,6 +699,7 @@ async function runPrewarmThrough(options: {
       undefined,
       undefined,
       options.vars,
+      workflowExpressionContext.githubContext,
     ),
     options.spec.stepId,
   );
@@ -1659,6 +1660,7 @@ async function handleWorkflow(options: {
       undefined,
       inputsContext,
       vars,
+      workflowGithubContext,
     );
     const expressionContext = {
       repoPath: repoRoot,
@@ -1828,6 +1830,7 @@ async function handleWorkflow(options: {
       needsContext,
       inputsContext,
       vars,
+      workflowGithubContext,
     );
     const expressionContext = {
       repoPath: repoRoot,

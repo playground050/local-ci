@@ -2667,3 +2667,84 @@ jobs:
     expect(parseJobRunsOn(filePath, "other")).toEqual([]);
   });
 });
+
+describe("parseWorkflowSteps with githubContext", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    if (tmpDir) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  function writeWorkflowTree(content: string): string {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oa-github-ctx-"));
+    const workflowDir = path.join(tmpDir, ".github", "workflows");
+    fs.mkdirSync(workflowDir, { recursive: true });
+    const filePath = path.join(workflowDir, "test.yml");
+    fs.writeFileSync(filePath, content);
+    return filePath;
+  }
+
+  const sha = "eeb9f99d5868bed3fbbea0f29c211eaff73ed593";
+  const githubCtx = { sha, repository: "acme/widgets", repository_owner: "acme", actor: "acme" };
+
+  it("uses the run's github context in env, run, name and with values", async () => {
+    const filePath = writeWorkflowTree(`
+name: GitHub Context
+on: [push]
+env:
+  WORKFLOW_SHA: \${{ github.sha }}
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      JOB_REPO: \${{ github.repository }}
+    steps:
+      - name: build \${{ github.sha }}
+        env:
+          STEP_SHA: \${{ github.sha }}
+        run: echo \${{ github.repository }}@\${{ github.sha }}
+      - uses: actions/cache@v4
+        with:
+          key: deps-\${{ github.sha }}
+          path: node_modules
+`);
+    const steps = (await parseWorkflowSteps(
+      filePath,
+      "test",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      githubCtx,
+    )) as any[];
+
+    expect(steps[0].Env).toMatchObject({
+      WORKFLOW_SHA: sha,
+      JOB_REPO: "acme/widgets",
+      STEP_SHA: sha,
+    });
+    expect(steps[0].Inputs.script).toBe(`echo acme/widgets@${sha}`);
+    expect(steps[0].Name).toBe(`build ${sha}`);
+    expect(steps[1].Inputs.key).toBe(`deps-${sha}`);
+  });
+
+  it("keeps the static defaults when no github context is provided", async () => {
+    const filePath = writeWorkflowTree(`
+name: GitHub Context Defaults
+on: [push]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          STEP_SHA: \${{ github.sha }}
+        run: echo \${{ github.repository }}
+`);
+    const steps = (await parseWorkflowSteps(filePath, "test")) as any[];
+    expect(steps[0].Env.STEP_SHA).toBe("0000000000000000000000000000000000000000");
+    expect(steps[0].Inputs.script).toBe("echo local/repo");
+  });
+});
