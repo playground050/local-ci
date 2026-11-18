@@ -133,8 +133,11 @@ fi`;
 
 /**
  * Create a synthetic step object for output capture.
- * Uses `if: always()` semantics by setting `Condition` so it runs even
- * if prior steps failed.
+ * Uses `if: always()` semantics so it runs even if prior steps failed.
+ * The key must be lowercase `condition` — that is what the DTU job generator
+ * reads (like the steps parsed from the workflow); with `Condition` the step
+ * fell back to `success()` and was skipped after any failure, dropping the
+ * outputs of failed jobs.
  */
 export function createOutputCaptureStep(): Record<string, any> {
   return {
@@ -144,7 +147,7 @@ export function createOutputCaptureStep(): Record<string, any> {
     Inputs: {
       script: outputCaptureScript(),
     },
-    Condition: "always()",
+    condition: "always()",
     Environment: {},
     ContextName: "__local_ci_output_capture",
   };

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { readCapturedStepOutputs, resolveJobOutputs } from "./result-builder.ts";
 
 // ── parseTimelineSteps ────────────────────────────────────────────────────────
 
@@ -472,5 +473,38 @@ describe("resolveJobOutputs", () => {
 
     const resolved = resolveJobOutputs(outputDefs, stepOutputs);
     expect(resolved).toEqual({ label: "shard-5" });
+  });
+});
+
+describe("readCapturedStepOutputs", () => {
+  let logDir: string;
+
+  beforeEach(() => {
+    logDir = fs.mkdtempSync(path.join(os.tmpdir(), "lci-outputs-"));
+  });
+
+  afterEach(() => {
+    fs.rmSync(logDir, { recursive: true, force: true });
+  });
+
+  it("returns the outputs captured by the DTU", () => {
+    fs.writeFileSync(path.join(logDir, "outputs.json"), JSON.stringify({ "out.answer": "42" }));
+    expect(readCapturedStepOutputs(logDir)).toEqual({ "out.answer": "42" });
+  });
+
+  it("returns an empty record when nothing was captured or the file is broken", () => {
+    expect(readCapturedStepOutputs(logDir)).toEqual({});
+    fs.writeFileSync(path.join(logDir, "outputs.json"), "{not json");
+    expect(readCapturedStepOutputs(logDir)).toEqual({});
+  });
+
+  it("feeds job outputs of a failed job, as on GitHub", () => {
+    // outputs.json as the DTU writes it while a job runs, before a later step fails
+    fs.writeFileSync(path.join(logDir, "outputs.json"), JSON.stringify({ answer: "42" }));
+    const outputs = resolveJobOutputs(
+      { answer: "${{ steps.out.outputs.answer }}" },
+      readCapturedStepOutputs(logDir),
+    );
+    expect(outputs).toEqual({ answer: "42" });
   });
 });

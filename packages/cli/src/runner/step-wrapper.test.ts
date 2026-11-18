@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { wrapStepScript, wrapJobSteps } from "./step-wrapper.ts";
+import {
+  appendOutputCaptureStep,
+  createOutputCaptureStep,
+  wrapJobSteps,
+  wrapStepScript,
+} from "./step-wrapper.ts";
 
 // ── wrapStepScript ────────────────────────────────────────────────────────────
 
@@ -96,5 +101,21 @@ describe("wrapJobSteps", () => {
     const result = wrapJobSteps([scriptStep, step2], true);
     expect(result[0].Inputs.script).toContain("__STEP_INDEX=1");
     expect(result[1].Inputs.script).toContain("__STEP_INDEX=2");
+  });
+});
+
+describe("createOutputCaptureStep", () => {
+  it("runs with always() so failed jobs still report their outputs", () => {
+    const step = createOutputCaptureStep();
+    // The DTU job generator reads the lowercase `condition` key and
+    // defaults to success() otherwise.
+    expect(step.condition).toBe("always()");
+    expect(step).not.toHaveProperty("Condition");
+  });
+
+  it("is appended after the job's own steps", () => {
+    const steps = appendOutputCaptureStep([{ Name: "build" }]);
+    expect(steps.map((s) => s.Name)).toEqual(["build", "__local_ci_output_capture"]);
+    expect(appendOutputCaptureStep([])).toEqual([]);
   });
 });

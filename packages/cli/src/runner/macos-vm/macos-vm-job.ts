@@ -10,7 +10,7 @@ import { getWorkingDirectory } from "../../output/working-directory.ts";
 import { createLogContext } from "../../output/logger.ts";
 import { debugRunner, debugBoot } from "../../output/debug.ts";
 import { type JobResult } from "../../output/reporter.ts";
-import { buildJobResult, isJobSuccessful } from "../result-builder.ts";
+import { buildJobResult, isJobSuccessful, readCapturedStepOutputs } from "../result-builder.ts";
 import { writeJobMetadata } from "../metadata.ts";
 import { appendOutputCaptureStep } from "../step-wrapper.ts";
 import { writeRunnerCredentials } from "../runner-credentials.ts";
@@ -261,15 +261,7 @@ exec ./run.sh --once
 
     // ── Assemble the JobResult from timeline + outputs ──────────────────────
     const timelinePath = path.join(logDir, "timeline.json");
-    const outputsFile = path.join(logDir, "outputs.json");
-    let stepOutputs: Record<string, string> = {};
-    if (fs.existsSync(outputsFile)) {
-      try {
-        stepOutputs = JSON.parse(fs.readFileSync(outputsFile, "utf-8"));
-      } catch {
-        /* best-effort */
-      }
-    }
+    const stepOutputs = readCapturedStepOutputs(logDir);
 
     const lastFailedStep = readLastFailedStep(timelinePath);
     const isBooting = !fs.existsSync(timelinePath);

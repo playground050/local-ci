@@ -36,7 +36,7 @@ import {
   resolveDockerApiUrl,
   resolveDockerExtraHosts,
 } from "../docker/container-config.ts";
-import { buildJobResult, isJobSuccessful } from "./result-builder.ts";
+import { buildJobResult, isJobSuccessful, readCapturedStepOutputs } from "./result-builder.ts";
 import { ensureImagePulled, type ImageRegistryCredentials } from "../docker/image-pull.ts";
 import { wrapJobSteps, appendOutputCaptureStep } from "./step-wrapper.ts";
 import { syncWorkspaceForRetry } from "./sync.ts";
@@ -1078,18 +1078,9 @@ export async function executeLocalJob(
 
     await new Promise<void>((resolve) => debugStream.end(resolve));
 
-    // Read step outputs captured by the DTU server via the runner's outputs API
-    let stepOutputs: Record<string, string> = {};
-    if (jobSucceeded) {
-      const outputsFile = path.join(logDir, "outputs.json");
-      try {
-        if (fs.existsSync(outputsFile)) {
-          stepOutputs = JSON.parse(fs.readFileSync(outputsFile, "utf-8"));
-        }
-      } catch {
-        /* best-effort */
-      }
-    }
+    // Read step outputs captured by the DTU server via the runner's outputs API.
+    // Failed jobs keep the outputs their earlier steps set, as on GitHub.
+    const stepOutputs = readCapturedStepOutputs(logDir);
 
     if (jobSucceeded && dirs.detectedPM && dirs.dependencyCacheDir) {
       const published = await publishDependencyCache({

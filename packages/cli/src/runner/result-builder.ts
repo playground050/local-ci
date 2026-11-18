@@ -227,6 +227,25 @@ function parseOutputFileContent(content: string, outputs: Record<string, string>
 // ─── Job output resolution ────────────────────────────────────────────────────
 
 /**
+ * Read the step outputs the DTU captured for a job (`<logDir>/outputs.json`).
+ *
+ * Read for failed jobs too: on GitHub, outputs set before a failing step are
+ * still visible to downstream `if: always()` / `if: failure()` jobs through
+ * `needs.<job>.outputs.*`.
+ */
+export function readCapturedStepOutputs(logDir: string): Record<string, string> {
+  const outputsFile = path.join(logDir, "outputs.json");
+  try {
+    if (fs.existsSync(outputsFile)) {
+      return JSON.parse(fs.readFileSync(outputsFile, "utf-8"));
+    }
+  } catch {
+    /* best-effort */
+  }
+  return {};
+}
+
+/**
  * Resolve job output definitions against actual step outputs.
  *
  * Job output templates reference `steps.<stepId>.outputs.<name>`. Since the
