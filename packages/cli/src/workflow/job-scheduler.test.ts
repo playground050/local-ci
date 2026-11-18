@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { parseJobDependencies, topoSort } from "./job-scheduler.ts";
+import { collectAncestorResults, parseJobDependencies, topoSort } from "./job-scheduler.ts";
+import { evaluateJobIf } from "./workflow-parser.ts";
 
 describe("parseJobDependencies", () => {
   let tmpDir: string;
@@ -137,5 +138,63 @@ describe("topoSort", () => {
     // Should still produce output (fallback to one wave)
     expect(waves.length).toBe(1);
     expect(waves[0]).toEqual(expect.arrayContaining(["a", "b"]));
+  });
+});
+
+describe("collectAncestorResults", () => {
+  // build -> test -> report, plus cleanup (needs test) and notify (needs build)
+  const deps = new Map<string, string[]>([
+    ["build", []],
+    ["test", ["build"]],
+    ["report", ["test"]],
+    ["cleanup", ["test"]],
+    ["notify", ["build"]],
+  ]);
+
+  it("returns direct and transitive dependency results", () => {
+    const results = new Map([
+      ["build", "failure"],
+      ["test", "skipped"],
+    ]);
+    expect(collectAncestorResults("report", deps, results)).toEqual({
+      test: "skipped",
+      build: "failure",
+    });
+  });
+
+  it("returns an empty record for jobs without needs", () => {
+    expect(collectAncestorResults("build", deps, new Map())).toEqual({});
+  });
+
+  it("handles diamond dependencies once", () => {
+    const diamond = new Map<string, string[]>([
+      ["a", []],
+      ["b", ["a"]],
+      ["c", ["a"]],
+      ["d", ["b", "c"]],
+    ]);
+    const results = new Map([
+      ["a", "success"],
+      ["b", "success"],
+      ["c", "failure"],
+    ]);
+    expect(collectAncestorResults("d", diamond, results)).toEqual({
+      a: "success",
+      b: "success",
+      c: "failure",
+    });
+  });
+
+  it("matches GitHub's job if: semantics after an upstream failure", () => {
+    const results = new Map([
+      ["build", "failure"],
+      ["test", "skipped"],
+    ]);
+    const upstream = collectAncestorResults("report", deps, results);
+    // implicit success(): skipped, like GitHub
+    expect(evaluateJobIf("success()", upstream)).toBe(false);
+    // always() and failure() still run two hops below the failure
+    expect(evaluateJobIf("always()", upstream)).toBe(true);
+    expect(evaluateJobIf("failure()", upstream)).toBe(true);
   });
 });

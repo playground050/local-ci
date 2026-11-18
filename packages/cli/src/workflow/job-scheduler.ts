@@ -59,3 +59,27 @@ export function topoSort(deps: Map<string, string[]>): string[][] {
   }
   return waves;
 }
+
+/**
+ * Results of every job `jobId` transitively depends on, for evaluating its
+ * `if:` status functions. GitHub's `success()` / `failure()` look at all
+ * ancestor jobs, so a job two hops below a failure is skipped by default and
+ * still runs under `if: failure()` or `if: always()`.
+ */
+export function collectAncestorResults(
+  jobId: string,
+  deps: Map<string, string[]>,
+  results: Map<string, string>,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  const stack = [...(deps.get(jobId) ?? [])];
+  while (stack.length > 0) {
+    const dep = stack.pop()!;
+    if (dep in out) {
+      continue;
+    }
+    out[dep] = results.get(dep) ?? "success";
+    stack.push(...(deps.get(dep) ?? []));
+  }
+  return out;
+}

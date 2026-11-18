@@ -43,7 +43,6 @@ import {
   parseJobOutputDefs,
   parseJobIf,
   evaluateJobIf,
-  parseFailFast,
   parseJobRunsOn,
   expandExpressions,
 } from "../workflow/workflow-parser.ts";
@@ -66,7 +65,7 @@ import {
   killOrphanedContainers,
   pruneStaleWorkspaces,
 } from "../docker/shutdown.ts";
-import { topoSort } from "../workflow/job-scheduler.ts";
+import { collectAncestorResults, topoSort } from "../workflow/job-scheduler.ts";
 import { expandReusableJobs, type ExpandedJobEntry } from "../workflow/reusable-workflow.ts";
 import { prefetchRemoteWorkflows } from "../workflow/remote-workflow-fetch.ts";
 import { printSummary, type JobResult } from "../output/reporter.ts";
@@ -1982,25 +1981,11 @@ async function handleWorkflow(options: {
     const ejWorkflowPath = ej?.workflowPath ?? workflowPath;
     const actualTaskName = ej?.sourceTaskName ?? jobId;
     const ifExpr = parseJobIf(ejWorkflowPath, actualTaskName);
-    if (ifExpr === null) {
-      // No if: condition — default behavior is success() (skip if any upstream failed)
-      const jobDeps = deps.get(jobId);
-      if (jobDeps && jobDeps.length > 0) {
-        const anyFailed = jobDeps.some((d) => jobResultStatus.get(d) === "failure");
-        if (anyFailed) {
-          return true;
-        }
-      }
-      return false;
-    }
-    // Build upstream job results for the evaluator
-    const upstreamResults: Record<string, string> = {};
-    const jobDeps = deps.get(jobId) ?? [];
-    for (const depId of jobDeps) {
-      upstreamResults[depId] = jobResultStatus.get(depId) ?? "success";
-    }
+    // Without an if: the job runs only when every upstream job succeeded
+    // (implicit success()); skipped upstream jobs skip it too.
+    const upstreamResults = collectAncestorResults(jobId, deps, jobResultStatus);
     const needsCtx = buildNeedsContext(jobId);
-    return !evaluateJobIf(ifExpr, upstreamResults, needsCtx);
+    return !evaluateJobIf(ifExpr ?? "success()", upstreamResults, needsCtx);
   };
 
   /** Run a job or skip it based on if: condition or unsupported OS */
@@ -2045,24 +2030,10 @@ async function handleWorkflow(options: {
     // After each wave, resolve workflow_call outputs for completed caller jobs
     resolveWorkflowCallOutputs();
 
-    // Check whether to abort remaining waves on failure
-    const waveHadFailures = allResults.some((r) => !r.succeeded);
-    if (waveHadFailures && wi < filteredWaves.length - 1) {
-      // Check fail-fast setting for jobs in this wave
-      const waveFailFastSettings = waveJobs.map((ej) =>
-        parseFailFast(ej.workflowPath, ej.sourceTaskName ?? ej.taskName),
-      );
-      // Abort unless ALL jobs in the wave explicitly set fail-fast: false
-      const shouldAbort = !waveFailFastSettings.every((ff) => ff === false);
-      if (shouldAbort) {
-        debugCli(
-          `Wave ${wi + 1} had failures — aborting remaining waves for ${path.basename(workflowPath)}`,
-        );
-        break;
-      } else {
-        debugCli(`Wave ${wi + 1} had failures but fail-fast is disabled — continuing`);
-      }
-    }
+    // Later waves are not aborted on failure: each job's if: (implicitly
+    // success()) decides, so `if: always()` / `if: failure()` jobs still run
+    // and plain dependents are reported as skipped, as on GitHub. fail-fast
+    // only concerns matrix legs, not downstream jobs.
   }
 
   return allResults;
