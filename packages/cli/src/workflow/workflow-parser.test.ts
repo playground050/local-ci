@@ -2821,7 +2821,12 @@ describe("expandExpressions — toJSON of whole contexts", () => {
     });
     const matrix = { node: "24", __job_index: "1", __job_total: "3" };
     expect(toJson("toJSON(matrix)", { matrix })).toEqual({ node: "24" });
-    expect(toJson("toJSON(strategy)", { matrix })).toEqual({ "job-index": 1, "job-total": 3 });
+    expect(toJson("toJSON(strategy)", { matrix })).toEqual({
+      "fail-fast": true,
+      "job-index": 1,
+      "job-total": 3,
+      "max-parallel": 3,
+    });
     expect(toJson("toJSON(inputs)", { inputs: { level: "debug" } })).toEqual({ level: "debug" });
     expect(toJson("toJSON(vars)", { vars: { REGION: "ap" } })).toEqual({ REGION: "ap" });
     expect(toJson("toJSON(env)", { env: { CI: "true" } })).toEqual({ CI: "true" });

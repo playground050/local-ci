@@ -56,10 +56,10 @@ Local CI aims to run real GitHub Actions workflows locally. The table below show
 | Key                       | Status | Notes                                                                                                                                                                                               |
 | ------------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `strategy.matrix`         | ✅     | Cartesian product of all array values is fully expanded                                                                                                                                             |
-| `strategy.matrix.include` | ❌     | Not implemented. The matrix parser only processes array-valued keys; `include` entries (which are objects) are silently dropped. Adding support would require post-processing the Cartesian product |
-| `strategy.matrix.exclude` | ❌     | Not implemented — same reason as `include`. `exclude` entries are objects and are dropped by the array-only parser                                                                                  |
+| `strategy.matrix.include` | ✅     | Merged into every combination it does not conflict with on an original matrix key; entries that fit none become combinations of their own, as on GitHub. Object values are carried as JSON strings. |
+| `strategy.matrix.exclude` | ✅     | Removes every combination matching all of the entry's keys (partial entries allowed). Applied before `include`, as on GitHub.                                                                       |
 | `strategy.fail-fast`      | ✅     | Setting `fail-fast: false` allows remaining matrix jobs to continue after a failure                                                                                                                 |
-| `strategy.max-parallel`   | ❌     | Not implemented. Parallelism is controlled by Local CI's host-level concurrency limiter (based on CPU count), not per-workflow job limits                                                           |
+| `strategy.max-parallel`   | ⚠️     | Exposed as `strategy.max-parallel` (default: the number of combinations), but not enforced: parallelism is controlled by Local CI's host-level concurrency limiter (based on CPU count).            |
 
 ## Step-Level Keys
 

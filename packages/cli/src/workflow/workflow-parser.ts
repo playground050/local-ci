@@ -324,8 +324,12 @@ function buildContextObject(name: string, ctx: ExprContext): unknown {
       return withoutInternalKeys(ctx.matrixContext);
     case "strategy":
       return {
+        "fail-fast": (ctx.matrixContext?.["__fail_fast"] ?? "true") === "true",
         "job-index": Number(ctx.matrixContext?.["__job_index"] ?? "0"),
         "job-total": Number(ctx.matrixContext?.["__job_total"] ?? "1"),
+        "max-parallel": Number(
+          ctx.matrixContext?.["__max_parallel"] ?? ctx.matrixContext?.["__job_total"] ?? "1",
+        ),
       };
     case "inputs":
       return { ...ctx.inputsContext };
@@ -445,6 +449,12 @@ function resolveContextRef(trimmed: string, ctx: ExprContext): string | undefine
   }
   if (trimmed === "strategy.job-index") {
     return ctx.matrixContext?.["__job_index"] ?? "0";
+  }
+  if (trimmed === "strategy.fail-fast") {
+    return ctx.matrixContext?.["__fail_fast"] ?? "true";
+  }
+  if (trimmed === "strategy.max-parallel") {
+    return ctx.matrixContext?.["__max_parallel"] ?? ctx.matrixContext?.["__job_total"] ?? "1";
   }
   if (trimmed.startsWith("github.")) {
     const key = trimmed.slice("github.".length);
@@ -802,46 +812,88 @@ export async function getWorkflowTemplate(filePath: string) {
 }
 
 /**
- * Collapse a matrix definition to a single job using the first value of each key.
- * Sets __job_total to "1" and __job_index to "0".
+ * Collapse a matrix definition to a single job: the first combination GitHub
+ * would run. Sets __job_total to "1" and __job_index to "0".
  * Used by the --no-matrix flag to run a matrix workflow as a single container.
  */
 export function collapseMatrixToSingle(matrixDef: Record<string, any[]>): Record<string, string>[] {
-  const combo: Record<string, string> = {};
-  for (const [key, values] of Object.entries(matrixDef)) {
-    if (values.length > 0) {
-      combo[key] = String(values[0]);
-    }
-  }
-  combo.__job_total = "1";
-  combo.__job_index = "0";
-  return [combo];
+  const [first = {}] = expandMatrixCombinations(matrixDef);
+  return [{ ...first, __job_total: "1", __job_index: "0" }];
+}
+
+/** Matrix values are carried as strings; objects and arrays as JSON. */
+function matrixValueToString(value: unknown): string {
+  return value !== null && typeof value === "object" ? JSON.stringify(value) : String(value);
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 /**
- * Compute the Cartesian product of a matrix definition.
- * Values are always coerced to strings.
- * Returns [{}] for an empty matrix so callers always get at least one combination.
+ * Expand a `strategy.matrix` definition into job combinations, following
+ * GitHub's rules:
+ *
+ * 1. The Cartesian product of every key except `include` / `exclude`, with the
+ *    first key varying slowest.
+ * 2. `exclude` entries remove each combination whose values match all of the
+ *    entry's keys (an entry may list only some keys).
+ * 3. Each `include` entry is merged into every combination it does not
+ *    conflict with on an original matrix key (values it adds itself may be
+ *    overwritten by later entries). An entry that fits no combination becomes
+ *    a combination of its own, appended at the end.
+ *
+ * Values are coerced to strings. Returns [{}] for an empty matrix so callers
+ * always get at least one combination.
  */
 export function expandMatrixCombinations(
   matrixDef: Record<string, any[]>,
 ): Record<string, string>[] {
-  const keys = Object.keys(matrixDef);
-  if (keys.length === 0) {
-    return [{}];
-  }
-  let combos: Record<string, string>[] = [{}];
+  const keys = Object.keys(matrixDef).filter((k) => k !== "include" && k !== "exclude");
+  const include = (matrixDef.include ?? []).filter(isPlainObject);
+  const exclude = (matrixDef.exclude ?? []).filter(isPlainObject);
+
+  let combos: Record<string, string>[] = keys.length > 0 || include.length === 0 ? [{}] : [];
   for (const key of keys) {
     const values = matrixDef[key];
     const next: Record<string, string>[] = [];
     for (const combo of combos) {
       for (const val of values) {
-        next.push({ ...combo, [key]: String(val) });
+        next.push({ ...combo, [key]: matrixValueToString(val) });
       }
     }
     combos = next;
   }
-  return combos;
+
+  combos = combos.filter(
+    (combo) =>
+      !exclude.some((entry) =>
+        Object.entries(entry).every(([k, v]) => combo[k] === matrixValueToString(v)),
+      ),
+  );
+
+  const originalKeys = new Set(keys);
+  const original = combos.length;
+  const added: Record<string, string>[] = [];
+  for (const entry of include) {
+    const values = Object.fromEntries(
+      Object.entries(entry).map(([k, v]) => [k, matrixValueToString(v)]),
+    );
+    let merged = false;
+    for (let i = 0; i < original; i++) {
+      const combo = combos[i];
+      const fits = Object.entries(values).every(([k, v]) => !originalKeys.has(k) || combo[k] === v);
+      if (fits) {
+        combos[i] = { ...combo, ...values };
+        merged = true;
+      }
+    }
+    if (!merged) {
+      added.push(values);
+    }
+  }
+  const all = [...combos, ...added];
+  return all.length > 0 ? all : [{}];
 }
 
 /**
@@ -1958,10 +2010,6 @@ function resolveValue(raw: string, needsCtx?: Record<string, Record<string, stri
 }
 
 /**
- * Parse `strategy.fail-fast` for a job.
- * Returns true/false if explicitly set, undefined if not specified.
- */
-/**
  * Whether a job sets `continue-on-error:` to true. The value may be an
  * expression over the matrix (e.g. `${{ matrix.experimental }}`), evaluated
  * per matrix leg.
@@ -1986,6 +2034,30 @@ export function parseJobContinueOnError(
   } catch {
     return false;
   }
+}
+
+/**
+ * `strategy.fail-fast` (default true) and `strategy.max-parallel` (default:
+ * every combination at once) for the `strategy` context of matrix jobs.
+ */
+export function parseStrategySettings(
+  filePath: string,
+  jobId: string,
+  total: number,
+): { failFast: boolean; maxParallel: number } {
+  let maxParallel = total;
+  try {
+    const raw = parseYaml(fs.readFileSync(filePath, "utf8"))?.jobs?.[jobId]?.strategy?.[
+      "max-parallel"
+    ];
+    const parsed = Number.parseInt(String(raw), 10);
+    if (Number.isFinite(parsed) && parsed > 0) {
+      maxParallel = parsed;
+    }
+  } catch {
+    // keep the default
+  }
+  return { failFast: parseFailFast(filePath, jobId) ?? true, maxParallel };
 }
 
 /**
@@ -2024,6 +2096,10 @@ export function parseJobRunsOn(filePath: string, jobId: string): string[] {
   return [];
 }
 
+/**
+ * Parse `strategy.fail-fast` for a job.
+ * Returns true/false if explicitly set, undefined if not specified.
+ */
 export function parseFailFast(filePath: string, jobId: string): boolean | undefined {
   const yaml = parseYaml(fs.readFileSync(filePath, "utf8"));
   const strategy = yaml?.jobs?.[jobId]?.strategy;

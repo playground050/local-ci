@@ -36,6 +36,7 @@ import {
   validateVars,
   extractVarRefs,
   parseMatrixDef,
+  parseStrategySettings,
   expandMatrixCombinations,
   collapseMatrixToSingle,
   isWorkflowRelevant,
@@ -1359,10 +1360,17 @@ async function expandJobs(
       ? collapseMatrixToSingle(matrixDef)
       : expandMatrixCombinations(matrixDef);
     const total = combos.length;
+    const strategy = parseStrategySettings(entry.workflowPath, entry.sourceTaskName, total);
     for (let ci = 0; ci < combos.length; ci++) {
       const matrixContext = noMatrix
         ? combos[ci]
-        : { ...combos[ci], __job_total: String(total), __job_index: String(ci) };
+        : {
+            ...combos[ci],
+            __job_total: String(total),
+            __job_index: String(ci),
+            __fail_fast: String(strategy.failFast),
+            __max_parallel: String(strategy.maxParallel),
+          };
       out.push({
         workflowPath: entry.workflowPath,
         taskName: entry.id,

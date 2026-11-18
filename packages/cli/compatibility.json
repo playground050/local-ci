@@ -283,13 +283,13 @@
         },
         {
           "key": "`strategy.matrix.include`",
-          "status": "unsupported",
-          "notes": "Not implemented. The matrix parser only processes array-valued keys; `include` entries (which are objects) are silently dropped. Adding support would require post-processing the Cartesian product"
+          "status": "supported",
+          "notes": "Merged into every combination it does not conflict with on an original matrix key; entries that fit none become combinations of their own, as on GitHub. Object values are carried as JSON strings."
         },
         {
           "key": "`strategy.matrix.exclude`",
-          "status": "unsupported",
-          "notes": "Not implemented — same reason as `include`. `exclude` entries are objects and are dropped by the array-only parser"
+          "status": "supported",
+          "notes": "Removes every combination matching all of the entry's keys (partial entries allowed). Applied before `include`, as on GitHub."
         },
         {
           "key": "`strategy.fail-fast`",
@@ -299,8 +299,8 @@
         },
         {
           "key": "`strategy.max-parallel`",
-          "status": "unsupported",
-          "notes": "Not implemented. Parallelism is controlled by Local CI's host-level concurrency limiter (based on CPU count), not per-workflow job limits"
+          "status": "partial",
+          "notes": "Exposed as `strategy.max-parallel` (default: the number of combinations), but not enforced: parallelism is controlled by Local CI's host-level concurrency limiter (based on CPU count)."
         }
       ]
     },
