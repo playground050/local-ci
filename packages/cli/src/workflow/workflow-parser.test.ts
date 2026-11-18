@@ -2748,3 +2748,88 @@ jobs:
     expect(steps[0].Inputs.script).toBe("echo local/repo");
   });
 });
+
+describe("expandExpressions — toJSON of whole contexts", () => {
+  const toJson = (
+    expr: string,
+    opts: {
+      matrix?: Record<string, string>;
+      needs?: Record<string, Record<string, string>>;
+      inputs?: Record<string, string>;
+      vars?: Record<string, string>;
+      runner?: { os: string; arch: string };
+      env?: Record<string, string>;
+      github?: Record<string, string>;
+      secrets?: Record<string, string>;
+    } = {},
+  ) =>
+    JSON.parse(
+      expandExpressions(
+        `\${{ ${expr} }}`,
+        undefined,
+        opts.secrets,
+        opts.matrix,
+        opts.needs,
+        opts.inputs,
+        opts.vars,
+        opts.runner,
+        opts.env,
+        opts.github,
+      ),
+    );
+
+  it("toJSON(github) includes the run's github context over the static defaults", () => {
+    const github = toJson("toJSON(github)", {
+      github: { sha: "abc123", repository: "acme/widgets", repository_owner: "acme" },
+    });
+    expect(github).toMatchObject({
+      sha: "abc123",
+      repository: "acme/widgets",
+      repository_owner: "acme",
+      ref_name: "main",
+      run_id: "1",
+    });
+    // nested placeholder refs such as github.event.pull_request.* are not flattened in
+    expect(Object.keys(github).some((key) => key.includes("."))).toBe(false);
+  });
+
+  it("toJSON(needs) uses GitHub's { outputs, result } shape and hides internal keys", () => {
+    const needs = toJson("toJSON(needs)", {
+      needs: { probe: { answer: "42", __result: "failure" }, lint: {} },
+    });
+    expect(needs).toEqual({
+      probe: { outputs: { answer: "42" }, result: "failure" },
+      lint: { outputs: {}, result: "success" },
+    });
+  });
+
+  it("supports paths into a context object", () => {
+    const needs = { probe: { answer: "42" } };
+    expect(toJson("toJSON(needs.probe)", { needs })).toEqual({
+      outputs: { answer: "42" },
+      result: "success",
+    });
+    expect(toJson("toJSON(needs.probe.outputs)", { needs })).toEqual({ answer: "42" });
+  });
+
+  it("serializes runner, matrix, strategy, inputs, vars and env", () => {
+    expect(toJson("toJSON(runner)", { runner: { os: "macOS", arch: "ARM64" } })).toEqual({
+      os: "macOS",
+      arch: "ARM64",
+    });
+    const matrix = { node: "24", __job_index: "1", __job_total: "3" };
+    expect(toJson("toJSON(matrix)", { matrix })).toEqual({ node: "24" });
+    expect(toJson("toJSON(strategy)", { matrix })).toEqual({ "job-index": 1, "job-total": 3 });
+    expect(toJson("toJSON(inputs)", { inputs: { level: "debug" } })).toEqual({ level: "debug" });
+    expect(toJson("toJSON(vars)", { vars: { REGION: "ap" } })).toEqual({ REGION: "ap" });
+    expect(toJson("toJSON(env)", { env: { CI: "true" } })).toEqual({ CI: "true" });
+  });
+
+  it("keeps scalar refs and unsupported contexts on the existing path", () => {
+    expect(toJson("toJSON(needs.probe.outputs.mode)", { needs: { probe: { mode: "fast" } } })).toBe(
+      "fast",
+    );
+    expect(toJson("toJSON(steps)")).toBe("");
+    expect(toJson("toJSON(secrets)", { secrets: { TOKEN: "s3cret" } })).toBe("");
+  });
+});

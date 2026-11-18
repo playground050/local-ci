@@ -528,7 +528,7 @@
         {
           "key": "`toJSON`, `fromJSON`",
           "status": "supported",
-          "notes": "`toJSON` emits 2-space-indented JSON matching GitHub Actions' pretty-printed output, so `hashFiles`/diff uses of `toJSON(x)` are reproducible.",
+          "notes": "`toJSON` emits 2-space-indented JSON matching GitHub Actions' pretty-printed output, so `hashFiles`/diff uses of `toJSON(x)` are reproducible. Whole contexts (`toJSON(github)`, `toJSON(needs)`, `toJSON(needs.<job>)`, `runner`, `matrix`, `strategy`, `inputs`, `vars`, `env`) serialize what Local CI knows of them; `steps`, `job` and `secrets` are not serialized.",
           "proof": [".github/workflows/smoke-binary.yml", ".github/workflows/smoke-expressions.yml"]
         },
         {

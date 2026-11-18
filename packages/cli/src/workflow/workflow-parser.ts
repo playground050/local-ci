@@ -285,10 +285,87 @@ function evalFromJson(rawArgs: string, ctx: ExprContext): string {
   }
 }
 
+const CONTEXT_PATH_RE =
+  /^(github|needs|runner|matrix|strategy|inputs|vars|env)((?:\.[A-Za-z0-9_-]+)*)$/;
+
+/** Drop the internal `__*` bookkeeping keys Local CI stores alongside values. */
+function withoutInternalKeys(record: Record<string, string> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(record ?? {}).filter(([key]) => !key.startsWith("__")));
+}
+
+/**
+ * Build a whole context object (`github`, `needs`, …) from what Local CI
+ * knows, so `toJSON(github)` / `toJSON(needs)` produce JSON instead of an
+ * empty string. `steps`, `job` and `secrets` are deliberately left out:
+ * steps/job are not populated at parse time and secrets must not be dumped.
+ */
+function buildContextObject(name: string, ctx: ExprContext): unknown {
+  switch (name) {
+    case "github": {
+      const github: Record<string, string> = {};
+      for (const [ref, value] of Object.entries(CONST_CONTEXT_REFS)) {
+        const key = ref.slice("github.".length);
+        if (!key.includes(".")) {
+          github[key] = value;
+        }
+      }
+      return { ...github, ...ctx.githubContext };
+    }
+    case "needs":
+      return Object.fromEntries(
+        Object.entries(ctx.needsContext ?? {}).map(([job, outputs]) => [
+          job,
+          { outputs: withoutInternalKeys(outputs), result: outputs["__result"] ?? "success" },
+        ]),
+      );
+    case "runner":
+      return { os: ctx.runnerContext?.os ?? "Linux", arch: ctx.runnerContext?.arch ?? "X64" };
+    case "matrix":
+      return withoutInternalKeys(ctx.matrixContext);
+    case "strategy":
+      return {
+        "job-index": Number(ctx.matrixContext?.["__job_index"] ?? "0"),
+        "job-total": Number(ctx.matrixContext?.["__job_total"] ?? "1"),
+      };
+    case "inputs":
+      return { ...ctx.inputsContext };
+    case "vars":
+      return { ...ctx.vars };
+    case "env":
+      return { ...ctx.envContext };
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * Resolve `github`, `needs.build`, `needs.build.outputs`, … to an object for
+ * toJSON. Returns undefined for anything that is not an object so scalar refs
+ * keep going through the normal string resolution.
+ */
+function resolveContextObject(expr: string, ctx: ExprContext): object | undefined {
+  const match = expr.trim().match(CONTEXT_PATH_RE);
+  if (!match) {
+    return undefined;
+  }
+  let value: unknown = buildContextObject(match[1], ctx);
+  for (const key of match[2].split(".").filter(Boolean)) {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    value = (value as Record<string, unknown>)[key];
+  }
+  return value && typeof value === "object" ? value : undefined;
+}
+
 // toJSON pretty-prints with 2-space indentation, matching GitHub Actions.
 // We parse rawValue first so `toJSON(fromJSON(...))` round-trips with
 // pretty-printing instead of re-quoting a compact-JSON string.
 function evalToJson(rawArgs: string, ctx: ExprContext): string {
+  const contextObject = resolveContextObject(rawArgs, ctx);
+  if (contextObject !== undefined) {
+    return JSON.stringify(contextObject, null, 2);
+  }
   const rawValue = evalArgOrLiteral(rawArgs, ctx);
   try {
     return JSON.stringify(JSON.parse(rawValue), null, 2);
