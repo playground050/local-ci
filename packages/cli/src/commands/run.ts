@@ -43,6 +43,7 @@ import {
   parseJobOutputDefs,
   parseJobIf,
   evaluateJobIf,
+  parseJobContinueOnError,
   parseJobRunsOn,
   expandExpressions,
 } from "../workflow/workflow-parser.ts";
@@ -68,7 +69,7 @@ import {
 import { collectAncestorResults, topoSort } from "../workflow/job-scheduler.ts";
 import { expandReusableJobs, type ExpandedJobEntry } from "../workflow/reusable-workflow.ts";
 import { prefetchRemoteWorkflows } from "../workflow/remote-workflow-fetch.ts";
-import { printSummary, type JobResult } from "../output/reporter.ts";
+import { failsRun, printSummary, type JobResult } from "../output/reporter.ts";
 import { computeDirtySha } from "../runner/dirty-sha.ts";
 import { RunStateStore } from "../output/run-state.ts";
 import { renderRunState } from "../output/state-renderer.ts";
@@ -513,7 +514,7 @@ async function finalizeRun(opts: {
     postCommitStatus(results, parsed.sha, parsed.githubToken);
   }
   await persistRunResult({ results, repoRoot, startedAt, sha: parsed.sha, branch });
-  const anyFailed = results.length === 0 || results.some((r) => !r.succeeded);
+  const anyFailed = results.length === 0 || results.some(failsRun);
   emitRunFinishSentinel(anyFailed ? "failed" : "passed");
   process.exit(anyFailed ? 1 : 0);
 }
@@ -1291,7 +1292,7 @@ async function runWorkflows(options: {
       }
     }
 
-    store.complete(allResults.some((r) => !r.succeeded) ? "failed" : "completed");
+    store.complete(allResults.some(failsRun) ? "failed" : "completed");
     return allResults;
   } finally {
     process.removeListener("SIGINT", exitOnSignal);
@@ -2018,7 +2019,15 @@ async function handleWorkflow(options: {
     }
     const ctx = buildNeedsContext(ej.taskName);
     const result = await runJob(ej, ctx);
-    jobResultStatus.set(ej.taskName, result.succeeded ? "success" : "failure");
+    // `continue-on-error: true` on the job: it still shows as failed, but the
+    // run does not fail and dependents see `success`, as on GitHub.
+    if (
+      !result.succeeded &&
+      parseJobContinueOnError(ej.workflowPath, ej.sourceTaskName ?? ej.taskName, ej.matrixContext)
+    ) {
+      result.continuedOnError = true;
+    }
+    jobResultStatus.set(ej.taskName, failsRun(result) ? "failure" : "success");
     collectOutputs(result, ej.taskName);
     return result;
   };

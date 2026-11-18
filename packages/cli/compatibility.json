@@ -213,8 +213,8 @@
         },
         {
           "key": "`jobs.<id>.continue-on-error`",
-          "status": "unsupported",
-          "notes": "Not implemented. Local CI pauses on failure so you can inspect and fix the container in place; `continue-on-error` would skip past failures and discard that debugging opportunity"
+          "status": "supported",
+          "notes": "A failing job with `continue-on-error: true` (or a matrix expression that evaluates to true) is still reported as failed, but does not fail the run, and dependent jobs see `needs.<id>.result == success`, as on GitHub."
         },
         {
           "key": "`jobs.<id>.concurrency`",

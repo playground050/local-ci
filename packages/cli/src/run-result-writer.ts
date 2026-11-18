@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { JobResult } from "./output/reporter.ts";
+import { failsRun, type JobResult } from "./output/reporter.ts";
 
 export const RUN_RESULT_SCHEMA_VERSION = 1;
 
@@ -156,7 +156,7 @@ export function buildRunResultJson(input: RunResultInput): RunResultFile {
     }
     return entry;
   });
-  const status: "passed" | "failed" = input.results.every((r) => r.succeeded) ? "passed" : "failed";
+  const status: "passed" | "failed" = input.results.some(failsRun) ? "failed" : "passed";
   return {
     schemaVersion: RUN_RESULT_SCHEMA_VERSION,
     repo: input.repo,

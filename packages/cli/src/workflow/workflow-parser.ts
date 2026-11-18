@@ -1962,6 +1962,33 @@ function resolveValue(raw: string, needsCtx?: Record<string, Record<string, stri
  * Returns true/false if explicitly set, undefined if not specified.
  */
 /**
+ * Whether a job sets `continue-on-error:` to true. The value may be an
+ * expression over the matrix (e.g. `${{ matrix.experimental }}`), evaluated
+ * per matrix leg.
+ */
+export function parseJobContinueOnError(
+  filePath: string,
+  jobId: string,
+  matrixContext?: Record<string, string>,
+): boolean {
+  try {
+    const raw = parseYaml(fs.readFileSync(filePath, "utf8"))?.jobs?.[jobId]?.["continue-on-error"];
+    if (raw === true || raw === false) {
+      return raw;
+    }
+    if (raw === undefined || raw === null) {
+      return false;
+    }
+    return (
+      expandExpressions(String(raw), undefined, undefined, matrixContext).trim().toLowerCase() ===
+      "true"
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Parse the `runs-on:` field of a workflow job and return the labels as a flat
  * array of strings. Accepts all three shapes GitHub allows:
  *

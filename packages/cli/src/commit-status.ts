@@ -1,6 +1,6 @@
 import { execSync } from "child_process";
 import { config } from "./config.ts";
-import type { JobResult } from "./output/reporter.ts";
+import { failsRun, type JobResult } from "./output/reporter.ts";
 
 /**
  * Post a GitHub commit status via the `gh` CLI.
@@ -42,7 +42,8 @@ export function postCommitStatus(results: JobResult[], sha?: string, githubToken
 
   const passed = results.filter((r) => r.succeeded).length;
   const total = results.length;
-  const allPassed = passed === total;
+  // continue-on-error jobs may fail without failing the run, as on GitHub
+  const allPassed = !results.some(failsRun);
 
   const state = allPassed ? "success" : "failure";
   const description = allPassed

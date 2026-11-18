@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { printSummary, type JobResult } from "./reporter.ts";
+import { failsRun, printSummary, type JobResult } from "./reporter.ts";
 
 function makeResult(overrides: Partial<JobResult> = {}): JobResult {
   return {
@@ -177,5 +177,36 @@ describe("empty results exit logic", () => {
 
   it("prints summary for non-empty results", () => {
     expect(shouldPrintSummary([makeResult()])).toBe(true);
+  });
+});
+
+describe("continue-on-error jobs", () => {
+  let output: string;
+
+  beforeEach(() => {
+    output = "";
+    vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+      output += chunk;
+      return true;
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("failsRun ignores failed jobs that continue on error", () => {
+    expect(failsRun(makeResult({ succeeded: false }))).toBe(true);
+    expect(failsRun(makeResult({ succeeded: false, continuedOnError: true }))).toBe(false);
+    expect(failsRun(makeResult({ succeeded: true }))).toBe(false);
+  });
+
+  it("shows the run as passed while still listing the failed job", () => {
+    printSummary([
+      makeResult({ succeeded: true, name: "ok" }),
+      makeResult({ name: "flaky", failedStep: "Run tests", continuedOnError: true }),
+    ]);
+    expect(output).toContain("━━━ FAILURES");
+    expect(output).toContain("✓ 1 passed, 1 failed (continue-on-error)");
   });
 });

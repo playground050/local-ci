@@ -94,6 +94,15 @@ describe("buildRunResultJson", () => {
     expect(r2.status).toBe("failed");
   });
 
+  it("does not fail the run for a failed continue-on-error job", () => {
+    const r = buildRunResultJson({
+      ...base,
+      results: [job(), job({ succeeded: false, continuedOnError: true })],
+    });
+    expect(r.status).toBe("passed");
+    expect(r.jobs[1].status).toBe("failed");
+  });
+
   it("emits the documented schema shape", () => {
     const out = buildRunResultJson({
       ...base,

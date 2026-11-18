@@ -29,6 +29,13 @@ export interface JobResult {
   outputs?: Record<string, string>;
   /** Optional actionable hint attached to a failure (e.g. missing system tool) */
   hint?: string;
+  /** The job failed but sets `continue-on-error: true`, so the run does not fail. */
+  continuedOnError?: boolean;
+}
+
+/** Whether a job result fails the whole run (`continue-on-error` jobs do not, as on GitHub). */
+export function failsRun(result: JobResult): boolean {
+  return !result.succeeded && !result.continuedOnError;
 }
 
 // ─── Formatting helpers ───────────────────────────────────────────────────────
@@ -112,10 +119,13 @@ export function printSummary(results: JobResult[], runDir?: string): void {
 
   process.stdout.write("\n━━━ SUMMARY ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n");
 
+  const blocking = failures.filter(failsRun);
+  const continued = failures.length - blocking.length;
+  const continuedNote = continued > 0 ? `, ${continued} failed (continue-on-error)` : "";
   const status =
-    failures.length > 0
-      ? `✗ ${failures.length} failed, ${passes.length} passed`
-      : `✓ ${passes.length} passed`;
+    blocking.length > 0
+      ? `✗ ${blocking.length} failed, ${passes.length} passed${continuedNote}`
+      : `✓ ${passes.length} passed${continuedNote}`;
 
   process.stdout.write(`  Status:    ${status} (${results.length} total)\n`);
   process.stdout.write(`  Duration:  ${formatDuration(totalMs)}\n`);

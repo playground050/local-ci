@@ -6,6 +6,7 @@ import {
   parseJobRunsOnLabels,
   parseMergedJobEnv,
   parseWorkflowContainer,
+  parseJobContinueOnError,
   parseWorkflowServices,
   referencesRuntimeContext,
 } from "./workflow-parser.ts";
@@ -2970,5 +2971,43 @@ jobs:
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true });
     }
+  });
+});
+
+describe("parseJobContinueOnError", () => {
+  let tmpDir: string;
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("reads booleans and matrix expressions per job", () => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "oa-job-coe-"));
+    const filePath = path.join(tmpDir, "wf.yml");
+    fs.writeFileSync(
+      filePath,
+      `
+on: [push]
+jobs:
+  soft:
+    continue-on-error: true
+    runs-on: ubuntu-latest
+    steps: [{ run: exit 1 }]
+  hard:
+    runs-on: ubuntu-latest
+    steps: [{ run: exit 1 }]
+  experimental:
+    continue-on-error: \${{ matrix.experimental }}
+    runs-on: ubuntu-latest
+    steps: [{ run: exit 1 }]
+`,
+    );
+    expect(parseJobContinueOnError(filePath, "soft")).toBe(true);
+    expect(parseJobContinueOnError(filePath, "hard")).toBe(false);
+    expect(parseJobContinueOnError(filePath, "experimental", { experimental: "true" })).toBe(true);
+    expect(parseJobContinueOnError(filePath, "experimental", { experimental: "false" })).toBe(
+      false,
+    );
+    expect(parseJobContinueOnError(filePath, "missing")).toBe(false);
   });
 });
