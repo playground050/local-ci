@@ -1770,6 +1770,8 @@ async function handleWorkflow(options: {
       container: undefined,
       workflowPath: ej.workflowPath,
       parentWorkflowPath: ej.callerJobId ? workflowPath : undefined,
+      // github.workflow / workflow_ref describe the top-level (caller) workflow, as on GitHub
+      ...describeWorkflow(workflowPath, repoRoot),
       taskId: ej.taskName,
     };
   };
@@ -2053,6 +2055,24 @@ async function handleWorkflow(options: {
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
+
+/** `github.workflow` is the workflow's `name:`, or its repo-relative path when unnamed. */
+export function describeWorkflow(
+  workflowPath: string,
+  repoRoot: string,
+): { workflowName: string; workflowFile: string } {
+  const workflowFile = path.relative(repoRoot, workflowPath).split(path.sep).join("/");
+  let name: unknown;
+  try {
+    name = parseYaml(fs.readFileSync(workflowPath, "utf8"))?.name;
+  } catch {
+    name = undefined;
+  }
+  return {
+    workflowName: typeof name === "string" && name.trim() ? name : workflowFile,
+    workflowFile,
+  };
+}
 
 function resolveRepoRoot() {
   let repoRoot = process.cwd();

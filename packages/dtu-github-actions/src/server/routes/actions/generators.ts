@@ -163,6 +163,7 @@ export function createJobResponse(
   const workspacePath = `${workspaceRoot}/${repoName}/${repoName}`;
 
   const realHeadSha = payload.realHeadSha;
+  const workflowName: string = payload.workflowName || "local-workflow";
 
   const Variables: { [key: string]: JobVariable } = {
     // Standard GitHub Actions environment variables — always set by real runners.
@@ -184,7 +185,7 @@ export function createJobResponse(
     GITHUB_API_URL: { Value: baseUrl, IsSecret: false },
     GITHUB_SERVER_URL: { Value: "https://github.com", IsSecret: false },
     GITHUB_REF_NAME: { Value: "main", IsSecret: false },
-    GITHUB_WORKFLOW: { Value: payload.workflowName || "local-workflow", IsSecret: false },
+    GITHUB_WORKFLOW: { Value: workflowName, IsSecret: false },
     GITHUB_WORKSPACE: { Value: workspacePath, IsSecret: false },
     // Repository / identity
     "system.github.token": { Value: "fake-token", IsSecret: true },
@@ -202,7 +203,7 @@ export function createJobResponse(
     "build.repository.uri": { Value: `https://github.com/${repoFullName}`, IsSecret: false },
   };
 
-  // Merge job-level env: into Variables first, then step-level env: (step wins on conflict).
+  // Merge job-level env: into Variables.
   // The runner exports every Variable as a process env var for all steps, so this is the
   // reliable mechanism to get LOCAL_CI_LOCAL, DB_HOST, DB_PORT etc. into the step subprocess
   // and into the runner's expression engine (${{ env.LOCAL_CI_LOCAL }}).
@@ -211,13 +212,8 @@ export function createJobResponse(
       Variables[key] = { Value: String(val), IsSecret: false };
     }
   }
-  for (const step of payload.steps || []) {
-    if (step.Env && typeof step.Env === "object") {
-      for (const [key, val] of Object.entries(step.Env)) {
-        Variables[key] = { Value: String(val), IsSecret: false };
-      }
-    }
-  }
+  // Step-level env: is NOT merged here: each step carries its own
+  // `environment` (see mappedSteps), so a step's env stays out of its siblings.
 
   const githubContext: any = {
     repository: repoFullName,
@@ -232,6 +228,20 @@ export function createJobResponse(
     action: "__run",
     token: "fake-token",
     job: "local-job",
+    // The runner derives GITHUB_* env vars from these keys (GITHUB_REF_NAME,
+    // GITHUB_WORKFLOW, …), as it does on GitHub. The numeric *_id fields are
+    // unknown locally and stay unset.
+    ref_name: "main",
+    ref_type: "branch",
+    ref_protected: "false",
+    base_ref: "",
+    head_ref: "",
+    repository_owner: ownerName,
+    triggering_actor: ownerName,
+    workflow: workflowName,
+    ...(payload.workflowFile
+      ? { workflow_ref: `${repoFullName}/${payload.workflowFile}@refs/heads/main` }
+      : {}),
   };
 
   if (payload.pull_request) {
@@ -251,16 +261,11 @@ export function createJobResponse(
     };
   }
 
-  // Collect env vars from job-level and all steps (seen by the runner's expression engine).
-  // Job-level env is applied first, then step-level env wins on conflict.
+  // Job-level env for the runner's expression engine. Step-level env reaches
+  // each step through its own `environment`, which the runner layers on top.
   const mergedEnv: Record<string, string> = {};
   if (payload.env && typeof payload.env === "object") {
     Object.assign(mergedEnv, payload.env);
-  }
-  for (const step of payload.steps || []) {
-    if (step.Env) {
-      Object.assign(mergedEnv, step.Env);
-    }
   }
 
   const ContextData: ContextData = {

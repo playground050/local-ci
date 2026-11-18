@@ -26,5 +26,9 @@ export interface Job {
   workflowPath?: string;
   /** Top-level workflow path for display grouping (when workflowPath is a reusable callee) */
   parentWorkflowPath?: string;
+  /** `github.workflow`: the top-level workflow's `name:` (or its repo-relative path when unnamed) */
+  workflowName?: string;
+  /** Repo-relative path of the top-level workflow file, for `github.workflow_ref` */
+  workflowFile?: string;
   [key: string]: any;
 }

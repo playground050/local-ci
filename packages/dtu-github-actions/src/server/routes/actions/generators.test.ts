@@ -58,23 +58,59 @@ describe("createJobResponse", () => {
     expect(entry.Value).toBe("true");
   });
 
-  it("step-level env overrides job-level env on conflict", () => {
+  it("step-level env overrides job-level env on conflict, for that step only", () => {
     const payload = {
       ...basePayload,
       env: { SHARED: "from-job" },
-      steps: [{ name: "step1", run: "echo hi", Env: { SHARED: "from-step" } }],
+      steps: [
+        { name: "step1", run: "echo hi", Env: { SHARED: "from-step", ONLY_STEP1: "1" } },
+        { name: "step2", run: "echo hi" },
+      ],
     };
 
     const response = createJobResponse("1", payload, "http://localhost:3000", "plan-1");
     const body = JSON.parse(response.Body);
 
-    // Variables should have the step-level value (last-write wins)
-    expect(body.Variables.SHARED).toEqual({ Value: "from-step", IsSecret: false });
+    // The step carries its own env; the runner layers it over the job env for that step.
+    const stepEnv = body.Steps[0].environment.map;
+    expect(stepEnv.find((e: any) => e.Key === "SHARED").Value).toBe("from-step");
+    expect(body.Steps[1].environment).toBeUndefined();
 
-    // ContextData.env should also have the step-level value
+    // Job-wide Variables / env context keep the job value and never see step-only keys,
+    // so step1's env does not leak into step2 (or earlier steps).
+    expect(body.Variables.SHARED).toEqual({ Value: "from-job", IsSecret: false });
+    expect(body.Variables.ONLY_STEP1).toBeUndefined();
     const entries = body.ContextData.env.d;
-    const entry = entries.find((e: any) => e.k === "SHARED");
-    expect(entry.v).toEqual({ t: 0, s: "from-step" });
+    expect(entries.find((e: any) => e.k === "SHARED").v).toEqual({ t: 0, s: "from-job" });
+    expect(entries.find((e: any) => e.k === "ONLY_STEP1")).toBeUndefined();
+  });
+
+  it("puts the GITHUB_* source keys into the github context", () => {
+    const payload = {
+      ...basePayload,
+      githubRepo: "acme/widgets",
+      repository: { full_name: "acme/widgets", name: "widgets", owner: { login: "acme" } },
+      workflowName: "CI",
+      workflowFile: ".github/workflows/ci.yml",
+    };
+    const body = JSON.parse(
+      createJobResponse("1", payload, "http://localhost:3000", "plan-1").Body,
+    );
+    const github = Object.fromEntries(
+      body.ContextData.github.d.filter((e: any) => e.v?.t === 0).map((e: any) => [e.k, e.v.s]),
+    );
+    expect(github).toMatchObject({
+      ref_name: "main",
+      ref_type: "branch",
+      ref_protected: "false",
+      base_ref: "",
+      head_ref: "",
+      repository_owner: "acme",
+      triggering_actor: "acme",
+      workflow: "CI",
+      workflow_ref: "acme/widgets/.github/workflows/ci.yml@refs/heads/main",
+    });
+    expect(body.Variables.GITHUB_WORKFLOW).toEqual({ Value: "CI", IsSecret: false });
   });
 
   it("includes default_branch in event.repository (issue #241)", () => {
