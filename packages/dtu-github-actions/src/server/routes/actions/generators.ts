@@ -293,12 +293,50 @@ export function createJobResponse(
     Object.assign(mergedEnv, payload.env);
   }
 
+  // matrix / strategy / needs for expressions the runner evaluates while the
+  // job runs (step `if:`, run-time `${{ }}`). Local CI keeps internal values
+  // under `__*` keys alongside them.
+  const matrixContext: Record<string, string> = payload.matrixContext || {};
+  // Prefer the typed values (booleans stay booleans) over the string copies.
+  let matrix: Record<string, unknown> = Object.fromEntries(
+    Object.entries(matrixContext).filter(([key]) => !key.startsWith("__")),
+  );
+  if (matrixContext.__matrix_json) {
+    try {
+      matrix = JSON.parse(matrixContext.__matrix_json);
+    } catch {
+      // keep the string values
+    }
+  }
+  const strategy =
+    matrixContext.__job_total !== undefined
+      ? {
+          "fail-fast": (matrixContext.__fail_fast ?? "true") === "true",
+          "job-index": Number(matrixContext.__job_index ?? "0"),
+          "job-total": Number(matrixContext.__job_total),
+          "max-parallel": Number(matrixContext.__max_parallel ?? matrixContext.__job_total),
+        }
+      : {};
+  const needs = Object.fromEntries(
+    Object.entries((payload.needsContext || {}) as Record<string, Record<string, string>>).map(
+      ([job, values]) => [
+        job,
+        {
+          outputs: Object.fromEntries(
+            Object.entries(values || {}).filter(([key]) => !key.startsWith("__")),
+          ),
+          result: values?.__result ?? "success",
+        },
+      ],
+    ),
+  );
+
   const ContextData: ContextData = {
     github: toContextData(githubContext),
     steps: { t: 2, d: [] }, // Empty steps context (required by EvaluateStepIf)
-    needs: { t: 2, d: [] }, // Empty needs context
-    strategy: { t: 2, d: [] }, // Empty strategy context
-    matrix: { t: 2, d: [] }, // Empty matrix context
+    needs: toContextData(needs),
+    strategy: toContextData(strategy),
+    matrix: toContextData(matrix),
     // env context: merged from job-level + step-level env: blocks so the runner's expression
     // engine can substitute ${{ env.LOCAL_CI_LOCAL }}, ${{ env.DB_HOST }} etc.
     ...(Object.keys(mergedEnv).length > 0 ? { env: toContextData(mergedEnv) } : {}),

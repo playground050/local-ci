@@ -6,6 +6,7 @@ import {
   collapseMatrixToSingle,
   expandExpressions,
   expandMatrixCombinations,
+  expandMatrixValues,
   parseStrategySettings,
 } from "./workflow-parser.ts";
 
@@ -142,5 +143,16 @@ jobs:
     expect(expandExpressions("${{ strategy.max-parallel }}", undefined, undefined, matrix)).toBe(
       "2",
     );
+  });
+});
+
+describe("expandMatrixValues", () => {
+  it("keeps YAML types for the runner's matrix context", () => {
+    expect(
+      expandMatrixValues({
+        experimental: [false, true],
+        include: [{ experimental: true, node: 24 }],
+      }),
+    ).toEqual([{ experimental: false }, { experimental: true, node: 24 }]);
   });
 });

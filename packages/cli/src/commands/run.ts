@@ -38,6 +38,7 @@ import {
   parseMatrixDef,
   parseStrategySettings,
   expandMatrixCombinations,
+  expandMatrixValues,
   collapseMatrixToSingle,
   isWorkflowRelevant,
   getChangedFiles,
@@ -1359,6 +1360,8 @@ async function expandJobs(
     const combos = noMatrix
       ? collapseMatrixToSingle(matrixDef)
       : expandMatrixCombinations(matrixDef);
+    // Typed values (booleans, numbers) for the matrix context the runner sees.
+    const typedCombos = expandMatrixValues(matrixDef);
     const total = combos.length;
     const strategy = parseStrategySettings(entry.workflowPath, entry.sourceTaskName, total);
     for (let ci = 0; ci < combos.length; ci++) {
@@ -1370,6 +1373,7 @@ async function expandJobs(
             __job_index: String(ci),
             __fail_fast: String(strategy.failFast),
             __max_parallel: String(strategy.maxParallel),
+            __matrix_json: JSON.stringify(typedCombos[ci] ?? {}),
           };
       out.push({
         workflowPath: entry.workflowPath,
@@ -1873,6 +1877,10 @@ async function handleWorkflow(options: {
     job.steps = steps;
     job.services = services;
     job.container = container ?? undefined;
+    // The runner evaluates step `if:` conditions (and other run-time
+    // expressions) itself, so it needs the matrix and needs contexts too.
+    job.matrixContext = matrixContext;
+    job.needsContext = needsContext;
 
     const result = await runJobExecutor(ej, job);
 

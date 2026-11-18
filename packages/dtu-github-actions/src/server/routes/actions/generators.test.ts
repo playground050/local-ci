@@ -277,3 +277,60 @@ describe("toTemplateTokenValue", () => {
     });
   });
 });
+
+describe("createJobResponse — matrix, strategy and needs for the runner", () => {
+  const contextOf = (node: any): any => {
+    switch (node?.t) {
+      case 0:
+        return node.s;
+      case 3:
+        return node.b;
+      case 4:
+        return node.n;
+      case 1:
+        return node.a.map(contextOf);
+      case 2:
+        return Object.fromEntries((node.d ?? []).map((e: any) => [e.k, contextOf(e.v)]));
+      default:
+        return undefined;
+    }
+  };
+
+  it("fills matrix (typed), strategy and needs so step if: conditions see them", () => {
+    const payload = {
+      id: "1",
+      name: "t",
+      githubRepo: "o/r",
+      steps: [],
+      matrixContext: {
+        experimental: "false",
+        __job_index: "0",
+        __job_total: "2",
+        __fail_fast: "false",
+        __max_parallel: "2",
+        __matrix_json: JSON.stringify({ experimental: false }),
+      },
+      needsContext: { setup: { skip: "true", __result: "failure" } },
+    };
+    const body = JSON.parse(createJobResponse("1", payload, "http://localhost:3000", "p").Body);
+    expect(contextOf(body.ContextData.matrix)).toEqual({ experimental: false });
+    expect(contextOf(body.ContextData.strategy)).toEqual({
+      "fail-fast": false,
+      "job-index": 0,
+      "job-total": 2,
+      "max-parallel": 2,
+    });
+    expect(contextOf(body.ContextData.needs)).toEqual({
+      setup: { outputs: { skip: "true" }, result: "failure" },
+    });
+  });
+
+  it("leaves them empty for jobs without matrix or needs", () => {
+    const body = JSON.parse(
+      createJobResponse("1", { id: "1", name: "t", githubRepo: "o/r", steps: [] }, "u", "p").Body,
+    );
+    expect(body.ContextData.matrix).toEqual({ t: 2, d: [] });
+    expect(body.ContextData.needs).toEqual({ t: 2, d: [] });
+    expect(body.ContextData.strategy).toEqual({ t: 2, d: [] });
+  });
+});

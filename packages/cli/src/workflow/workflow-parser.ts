@@ -320,8 +320,18 @@ function buildContextObject(name: string, ctx: ExprContext): unknown {
       );
     case "runner":
       return { os: ctx.runnerContext?.os ?? "Linux", arch: ctx.runnerContext?.arch ?? "X64" };
-    case "matrix":
+    case "matrix": {
+      // Typed values (booleans, numbers) when the job came from a matrix expansion.
+      const typed = ctx.matrixContext?.["__matrix_json"];
+      if (typed) {
+        try {
+          return JSON.parse(typed);
+        } catch {
+          // fall back to the string values
+        }
+      }
       return withoutInternalKeys(ctx.matrixContext);
+    }
     case "strategy":
       return {
         "fail-fast": (ctx.matrixContext?.["__fail_fast"] ?? "true") === "true",
@@ -849,47 +859,51 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 export function expandMatrixCombinations(
   matrixDef: Record<string, any[]>,
 ): Record<string, string>[] {
+  return expandMatrixValues(matrixDef).map((combo) =>
+    Object.fromEntries(Object.entries(combo).map(([k, v]) => [k, matrixValueToString(v)])),
+  );
+}
+
+/**
+ * Same as {@link expandMatrixCombinations}, but keeps the values' YAML types
+ * (booleans, numbers, objects) for the `matrix` context, where GitHub keeps
+ * them too: `if: matrix.experimental` is false for `experimental: false`.
+ */
+export function expandMatrixValues(matrixDef: Record<string, any[]>): Record<string, unknown>[] {
   const keys = Object.keys(matrixDef).filter((k) => k !== "include" && k !== "exclude");
   const include = (matrixDef.include ?? []).filter(isPlainObject);
   const exclude = (matrixDef.exclude ?? []).filter(isPlainObject);
+  const same = (a: unknown, b: unknown) => matrixValueToString(a) === matrixValueToString(b);
 
-  let combos: Record<string, string>[] = keys.length > 0 || include.length === 0 ? [{}] : [];
+  let combos: Record<string, unknown>[] = keys.length > 0 || include.length === 0 ? [{}] : [];
   for (const key of keys) {
-    const values = matrixDef[key];
-    const next: Record<string, string>[] = [];
+    const next: Record<string, unknown>[] = [];
     for (const combo of combos) {
-      for (const val of values) {
-        next.push({ ...combo, [key]: matrixValueToString(val) });
+      for (const val of matrixDef[key]) {
+        next.push({ ...combo, [key]: val });
       }
     }
     combos = next;
   }
 
   combos = combos.filter(
-    (combo) =>
-      !exclude.some((entry) =>
-        Object.entries(entry).every(([k, v]) => combo[k] === matrixValueToString(v)),
-      ),
+    (combo) => !exclude.some((entry) => Object.entries(entry).every(([k, v]) => same(combo[k], v))),
   );
 
   const originalKeys = new Set(keys);
   const original = combos.length;
-  const added: Record<string, string>[] = [];
+  const added: Record<string, unknown>[] = [];
   for (const entry of include) {
-    const values = Object.fromEntries(
-      Object.entries(entry).map(([k, v]) => [k, matrixValueToString(v)]),
-    );
     let merged = false;
     for (let i = 0; i < original; i++) {
       const combo = combos[i];
-      const fits = Object.entries(values).every(([k, v]) => !originalKeys.has(k) || combo[k] === v);
-      if (fits) {
-        combos[i] = { ...combo, ...values };
+      if (Object.entries(entry).every(([k, v]) => !originalKeys.has(k) || same(combo[k], v))) {
+        combos[i] = { ...combo, ...entry };
         merged = true;
       }
     }
     if (!merged) {
-      added.push(values);
+      added.push({ ...entry });
     }
   }
   const all = [...combos, ...added];

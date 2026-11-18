@@ -3016,3 +3016,14 @@ jobs:
     expect(parseJobContinueOnError(filePath, "missing")).toBe(false);
   });
 });
+
+describe("toJSON(matrix) keeps YAML types", () => {
+  it("uses the typed values recorded at matrix expansion", () => {
+    const out = expandExpressions("${{ toJSON(matrix) }}", undefined, undefined, {
+      experimental: "false",
+      node: "24",
+      __matrix_json: JSON.stringify({ experimental: false, node: 24 }),
+    });
+    expect(JSON.parse(out)).toEqual({ experimental: false, node: 24 });
+  });
+});
