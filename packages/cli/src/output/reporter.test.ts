@@ -34,6 +34,16 @@ describe("printSummary", () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
+  it("counts fail-fast cancelled legs without listing them as failures", () => {
+    printSummary([
+      makeResult({ taskId: "test", failedStep: "Run tests" }),
+      makeResult({ taskId: "test", cancelled: true, name: "local-ci-cancelled-test" }),
+    ]);
+
+    expect(output).toContain("1 failed, 0 passed, 1 cancelled (fail-fast)");
+    expect(output.match(/✗ .* > test/g)).toHaveLength(1);
+  });
+
   it("outputs full step log content when failedStepLogPath exists", () => {
     const logPath = path.join(tmpDir, "Run-assertion-test.log");
     fs.writeFileSync(logPath, "line 1\nline 2\nline 3\n");

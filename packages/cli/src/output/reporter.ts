@@ -31,6 +31,8 @@ export interface JobResult {
   hint?: string;
   /** The job failed but sets `continue-on-error: true`, so the run does not fail. */
   continuedOnError?: boolean;
+  /** A matrix leg that never started because another leg failed (`fail-fast`). */
+  cancelled?: boolean;
 }
 
 /** Whether a job result fails the whole run (`continue-on-error` jobs do not, as on GitHub). */
@@ -76,7 +78,9 @@ export function printSummary(results: JobResult[], runDir?: string): void {
   if (isJsonMode()) {
     return;
   }
-  const failures = results.filter((r) => !r.succeeded);
+  // Cancelled matrix legs never ran: count them, but list no failure for them.
+  const cancelled = results.filter((r) => r.cancelled).length;
+  const failures = results.filter((r) => !r.succeeded && !r.cancelled);
   const passes = results.filter((r) => r.succeeded);
   const totalMs = results.reduce((sum, r) => sum + r.durationMs, 0);
 
@@ -121,7 +125,9 @@ export function printSummary(results: JobResult[], runDir?: string): void {
 
   const blocking = failures.filter(failsRun);
   const continued = failures.length - blocking.length;
-  const continuedNote = continued > 0 ? `, ${continued} failed (continue-on-error)` : "";
+  const continuedNote =
+    (continued > 0 ? `, ${continued} failed (continue-on-error)` : "") +
+    (cancelled > 0 ? `, ${cancelled} cancelled (fail-fast)` : "");
   const status =
     blocking.length > 0
       ? `✗ ${blocking.length} failed, ${passes.length} passed${continuedNote}`

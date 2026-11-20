@@ -1482,15 +1482,23 @@ async function runWaveJobs(
   runOrSkipJob: (ej: ExpandedJob) => Promise<JobResult>,
   workflowPath: string,
   seenErrorMessages: Set<string>,
+  matrixLimiterFor: (
+    ej: ExpandedJob,
+  ) => ReturnType<typeof createConcurrencyLimiter> | undefined = () => undefined,
 ): Promise<JobResult[]> {
+  const runLimited = (ej: ExpandedJob) =>
+    limiter.run(() =>
+      runOrSkipJob(ej).catch((error) => {
+        throw wrapJobError(ej.taskName, error);
+      }),
+    );
+  // A matrix's own max-parallel slot is taken before the shared one, so legs
+  // waiting for their matrix do not hold slots other jobs could use.
   const settled = await Promise.allSettled(
-    waveJobs.map((ej) =>
-      limiter.run(() =>
-        runOrSkipJob(ej).catch((error) => {
-          throw wrapJobError(ej.taskName, error);
-        }),
-      ),
-    ),
+    waveJobs.map((ej) => {
+      const matrixLimiter = matrixLimiterFor(ej);
+      return matrixLimiter ? matrixLimiter.run(() => runLimited(ej)) : runLimited(ej);
+    }),
   );
   const out: JobResult[] = [];
   for (const r of settled) {
@@ -1634,6 +1642,16 @@ async function handleWorkflow(options: {
   // we skip them with a visible warning. See:
   //   https://github.com/redwoodjs/local-ci/issues/254  (this guardrail)
   //   https://github.com/redwoodjs/local-ci/issues/258  (real macOS support)
+  const cancelledResult = (ej: ExpandedJob): JobResult => ({
+    name: `local-ci-cancelled-${ej.taskName}`,
+    workflow: path.basename(ej.workflowPath),
+    taskId: ej.taskName,
+    succeeded: false,
+    cancelled: true,
+    durationMs: 0,
+    debugLogPath: "",
+    steps: [],
+  });
   const skippedResult = (ej: ExpandedJob): JobResult => ({
     name: `local-ci-skipped-${ej.taskName}`,
     workflow: path.basename(ej.workflowPath),
@@ -2097,6 +2115,34 @@ async function handleWorkflow(options: {
 
   // Track job results for if-condition evaluation (success/failure status)
   const jobResultStatus = new Map<string, string>();
+  /**
+   * Record a job's result. Matrix legs share one job id, so the job's result
+   * is the most severe of its legs (failure > cancelled > success > skipped),
+   * as on GitHub, instead of whichever leg finished last.
+   */
+  const setJobResult = (jobId: string, result: string) => {
+    jobResultStatus.set(jobId, mostSevereResult(jobResultStatus.get(jobId), result));
+  };
+  /** Matrix jobs (by job id) where a leg failed with `fail-fast` on. */
+  const failFastTriggered = new Set<string>();
+  /**
+   * `strategy.max-parallel`: at most that many legs of one matrix run at once
+   * (on top of Local CI's host-wide limit). No limiter when it allows them all.
+   */
+  const matrixLimiters = new Map<string, ReturnType<typeof createConcurrencyLimiter>>();
+  const matrixLimiterFor = (ej: ExpandedJob) => {
+    const max = Number.parseInt(ej.matrixContext?.__max_parallel ?? "", 10);
+    const total = Number.parseInt(ej.matrixContext?.__job_total ?? "", 10);
+    if (!Number.isFinite(max) || max <= 0 || (Number.isFinite(total) && max >= total)) {
+      return undefined;
+    }
+    let matrixLimiter = matrixLimiters.get(ej.taskName);
+    if (!matrixLimiter) {
+      matrixLimiter = createConcurrencyLimiter(max);
+      matrixLimiters.set(ej.taskName, matrixLimiter);
+    }
+    return matrixLimiter;
+  };
 
   /** Check if a job should be skipped based on its if: condition */
   const shouldSkipJob = (jobId: string, ej?: ExpandedJob): boolean => {
@@ -2118,13 +2164,21 @@ async function handleWorkflow(options: {
 
   /** Run a job or skip it based on if: condition or unsupported OS */
   const runOrSkipJob = async (ej: ExpandedJob): Promise<JobResult> => {
+    // fail-fast: a leg that has not started yet when another leg of the same
+    // matrix failed is cancelled. Legs already running are left to finish
+    // (GitHub cancels those too).
+    if (ej.matrixContext?.__fail_fast === "true" && failFastTriggered.has(ej.taskName)) {
+      debugCli(`Cancelling ${ej.taskName} (fail-fast: another matrix leg failed)`);
+      setJobResult(ej.taskName, "cancelled");
+      return cancelledResult(ej);
+    }
     const osSkip = maybeSkipUnsupportedOS(ej);
     if (osSkip) {
-      jobResultStatus.set(ej.taskName, "skipped");
+      setJobResult(ej.taskName, "skipped");
       return osSkip;
     }
     if (ej.matrixError) {
-      jobResultStatus.set(ej.taskName, "failure");
+      setJobResult(ej.taskName, "failure");
       return createFailedJobResult(
         ej.taskName,
         ej.workflowPath,
@@ -2134,7 +2188,7 @@ async function handleWorkflow(options: {
     if (shouldSkipJob(ej.taskName, ej)) {
       debugCli(`Skipping ${ej.taskName} (if: condition is false)`);
       const result = skippedResult(ej);
-      jobResultStatus.set(ej.taskName, "skipped");
+      setJobResult(ej.taskName, "skipped");
       return result;
     }
     const ctx = buildNeedsContext(ej.taskName);
@@ -2147,7 +2201,10 @@ async function handleWorkflow(options: {
     ) {
       result.continuedOnError = true;
     }
-    jobResultStatus.set(ej.taskName, failsRun(result) ? "failure" : "success");
+    setJobResult(ej.taskName, failsRun(result) ? "failure" : "success");
+    if (failsRun(result) && ej.matrixContext?.__fail_fast === "true") {
+      failFastTriggered.add(ej.taskName);
+    }
     collectOutputs(result, ej.taskName);
     return result;
   };
@@ -2230,6 +2287,7 @@ async function handleWorkflow(options: {
       runOrSkipJob,
       workflowPath,
       seenErrorMessages,
+      matrixLimiterFor,
     );
     allResults.push(...results);
 
@@ -2246,6 +2304,21 @@ async function handleWorkflow(options: {
 }
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
+
+const RESULT_SEVERITY: Record<string, number> = {
+  skipped: 0,
+  success: 1,
+  cancelled: 2,
+  failure: 3,
+};
+
+/** The more severe of two job results (failure > cancelled > success > skipped). */
+export function mostSevereResult(previous: string | undefined, next: string): string {
+  if (previous === undefined) {
+    return next;
+  }
+  return (RESULT_SEVERITY[next] ?? 0) > (RESULT_SEVERITY[previous] ?? 0) ? next : previous;
+}
 
 /** `github.workflow` is the workflow's `name:`, or its repo-relative path when unnamed. */
 export function describeWorkflow(

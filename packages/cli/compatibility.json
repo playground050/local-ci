@@ -293,14 +293,14 @@
         },
         {
           "key": "`strategy.fail-fast`",
-          "status": "supported",
-          "notes": "Setting `fail-fast: false` allows remaining matrix jobs to continue after a failure",
+          "status": "partial",
+          "notes": "When a matrix leg fails (and does not set `continue-on-error`), legs of the same matrix that have not started yet are cancelled and reported as cancelled; `fail-fast: false` lets them run. Unlike GitHub, legs that are already running are not cancelled and run to completion.",
           "proof": [".github/workflows/smoke-matrix.yml"]
         },
         {
           "key": "`strategy.max-parallel`",
-          "status": "partial",
-          "notes": "Exposed as `strategy.max-parallel` (default: the number of combinations), but not enforced: parallelism is controlled by Local CI's host-level concurrency limiter (based on CPU count)."
+          "status": "supported",
+          "notes": "At most that many legs of the matrix run at once, within Local CI's host-level concurrency limit (based on CPU count). Also exposed as `strategy.max-parallel` (default: the number of combinations)."
         }
       ]
     },
