@@ -1664,25 +1664,26 @@ describe("parseStepIf", () => {
     expect(parseStepIf("   ")).toBeUndefined();
   });
 
-  it("returns a naked expression unchanged", () => {
+  it("implies success() for a naked expression, as GitHub's server does", () => {
     expect(parseStepIf("contains(runner.name, 'blacksmith')")).toBe(
-      "contains(runner.name, 'blacksmith')",
+      "success() && (contains(runner.name, 'blacksmith'))",
     );
     expect(parseStepIf("always()")).toBe("always()");
+    expect(parseStepIf("failure() || matrix.x")).toBe("failure() || matrix.x");
   });
 
   it("strips a ${{ }} wrapper", () => {
     expect(parseStepIf("${{ contains(runner.name, 'blacksmith') }}")).toBe(
-      "contains(runner.name, 'blacksmith')",
+      "success() && (contains(runner.name, 'blacksmith'))",
     );
     expect(parseStepIf("${{ !contains(runner.name, 'blacksmith') }}")).toBe(
-      "!contains(runner.name, 'blacksmith')",
+      "success() && (!contains(runner.name, 'blacksmith'))",
     );
   });
 
   it("coerces boolean YAML values to string", () => {
-    expect(parseStepIf(true)).toBe("true");
-    expect(parseStepIf(false)).toBe("false");
+    expect(parseStepIf(true)).toBe("success() && (true)");
+    expect(parseStepIf(false)).toBe("success() && (false)");
   });
 
   it("trims whitespace inside and outside the wrapper", () => {
@@ -1929,14 +1930,14 @@ jobs:
     const conds = steps.map((s: any) => s.condition);
     // no-if → undefined (server defaults to success())
     expect(conds[0]).toBeUndefined();
-    // naked expression passes through unchanged
-    expect(conds[1]).toBe("contains(runner.name, 'blacksmith')");
+    // without a status function, success() is implied (as GitHub's server does)
+    expect(conds[1]).toBe("success() && (contains(runner.name, 'blacksmith'))");
     // ${{ }} wrapper is stripped
-    expect(conds[2]).toBe("!contains(runner.name, 'blacksmith')");
+    expect(conds[2]).toBe("success() && (!contains(runner.name, 'blacksmith'))");
     expect(conds[3]).toBe("always()");
-    expect(conds[4]).toBe("false");
+    expect(conds[4]).toBe("success() && (false)");
     // applies to `uses` steps too
-    expect(conds[5]).toBe("runner.os == 'Linux'");
+    expect(conds[5]).toBe("success() && (runner.os == 'Linux')");
   });
 });
 

@@ -324,7 +324,7 @@
         {
           "key": "`steps[*].if`",
           "status": "supported",
-          "notes": "The condition is passed to the official runner binary, which evaluates it at runtime with the live `steps` and `job` contexts.",
+          "notes": "The condition is passed to the official runner binary, which evaluates it at runtime with the live `steps` and `job` contexts. As on GitHub, a condition without a status function is sent as `success() && (<condition>)`, so it is skipped after a failed step.",
           "proof": [".github/workflows/smoke-artifacts.yml"]
         },
         {

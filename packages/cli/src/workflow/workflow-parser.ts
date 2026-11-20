@@ -2069,7 +2069,10 @@ export function parseStepIf(rawIf: unknown): string | undefined {
       return undefined;
     }
   }
-  return expr;
+  // GitHub's server sends the runner `success() && (<if>)` when the condition
+  // calls no status function; the runner evaluates the condition as given.
+  // Without this, a step with `if: matrix.x != ''` ran after a failed step.
+  return callsStatusFunction(expr) ? expr : `success() && (${expr})`;
 }
 
 /**
