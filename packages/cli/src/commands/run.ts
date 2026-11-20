@@ -1646,7 +1646,22 @@ async function handleWorkflow(options: {
   const warnedUnsupportedOS = new Set<string>();
   const macosVmHost = checkMacosVmHost();
   const classifyJob = (ej: ExpandedJob) => {
-    const labels = parseJobRunsOn(ej.workflowPath, ej.sourceTaskName ?? ej.taskName);
+    // Resolve expressions such as `runs-on: ${{ matrix.os }}` per matrix leg,
+    // so a macOS leg is recognized (and skipped without a macOS VM host)
+    // instead of running in a Linux container.
+    const labels = parseJobRunsOn(ej.workflowPath, ej.sourceTaskName ?? ej.taskName).map((label) =>
+      label.includes("${{")
+        ? expandExpressions(
+            label,
+            undefined,
+            undefined,
+            ej.matrixContext,
+            undefined,
+            ej.inputs,
+            vars,
+          )
+        : label,
+    );
     return { labels, kind: classifyRunsOn(labels) };
   };
   const canRunMacosHere = (kind: RunnerOSKind) => kind === "macos" && macosVmHost.supported;
