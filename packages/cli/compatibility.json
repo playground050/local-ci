@@ -98,8 +98,7 @@
           "notes": "Local reusable workflows (`uses: ./.github/workflows/...`) are inlined into the caller's dependency graph. Remote refs are fetched from GitHub (requires `--github-token` or `LOCAL_CI_GITHUB_TOKEN`). `inputs:`/`outputs:` passing and nested reusable workflows are supported",
           "proof": [
             ".github/workflows/smoke-reusable-workflows.yml",
-            ".github/workflows/smoke-nested-level-1.yml",
-            ".github/workflows/smoke-remote-private-workflow.yml"
+            ".github/workflows/smoke-nested-level-1.yml"
           ]
         },
         {
@@ -261,8 +260,7 @@
           "notes": "Local refs (`./`) are expanded inline. Remote refs are fetched from GitHub (requires `--github-token` or `LOCAL_CI_GITHUB_TOKEN`; public repos may work without auth). `with:` (inputs) and `secrets:` pass-through are supported",
           "proof": [
             ".github/workflows/smoke-reusable-workflows.yml",
-            ".github/workflows/smoke-reusable-inputs-outputs.yml",
-            ".github/workflows/smoke-remote-private-workflow.yml"
+            ".github/workflows/smoke-reusable-inputs-outputs.yml"
           ]
         },
         {
@@ -609,8 +607,7 @@
         {
           "key": "`GITHUB_TOKEN`",
           "status": "partial",
-          "notes": "Not injected automatically. Pass `--github-token` or set `LOCAL_CI_GITHUB_TOKEN` to make it available as `secrets.GITHUB_TOKEN`. GitHub API calls from the runner are answered locally by Local CI's API emulation layer. OIDC ID-token issuance (`permissions.id-token: write` → federated cloud auth) is not implemented — actions that exchange the OIDC token with AWS/GCP/Vault will fail.",
-          "proof": [".github/workflows/smoke-remote-private-workflow.yml"]
+          "notes": "Not injected automatically. Pass `--github-token` or set `LOCAL_CI_GITHUB_TOKEN` to make it available as `secrets.GITHUB_TOKEN`. GitHub API calls from the runner are answered locally by Local CI's API emulation layer. OIDC ID-token issuance (`permissions.id-token: write` → federated cloud auth) is not implemented — actions that exchange the OIDC token with AWS/GCP/Vault will fail."
         },
         {
           "key": "Workflow commands (`::set-output::`, `::error::`, etc.)",
