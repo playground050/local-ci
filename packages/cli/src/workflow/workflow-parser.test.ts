@@ -9,7 +9,7 @@ import {
   parseWorkflowContainer,
   parseJobContinueOnError,
   parseWorkflowServices,
-  referencesRuntimeContext,
+  runnerCanEvaluate,
 } from "./workflow-parser.ts";
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -1462,7 +1462,8 @@ describe("expandExpressions with endsWith()", () => {
 
 describe("expandExpressions with join()", () => {
   it("joins a JSON array with default separator", () => {
-    expect(expandExpressions('${{ join(fromJSON(\'["a", "b", "c"]\')) }}')).toBe("a, b, c");
+    // GitHub's default separator is ","
+    expect(expandExpressions('${{ join(fromJSON(\'["a", "b", "c"]\')) }}')).toBe("a,b,c");
   });
 
   it("joins a JSON array with custom separator", () => {
@@ -2926,17 +2927,14 @@ jobs:
 });
 
 describe("steps / job contexts are left for the runner", () => {
-  it("detects references to the steps and job contexts", () => {
-    expect(referencesRuntimeContext("steps.build.outputs.version")).toBe(true);
-    expect(referencesRuntimeContext("job.status")).toBe(true);
-    expect(referencesRuntimeContext("toJSON(steps)")).toBe(true);
-    expect(referencesRuntimeContext("steps['my-step'].outcome == 'failure'")).toBe(true);
-    expect(referencesRuntimeContext("!cancelled() && job.status == 'success'")).toBe(true);
-    expect(referencesRuntimeContext("github.job")).toBe(false);
-    expect(referencesRuntimeContext("needs.job.outputs.x")).toBe(false);
-    expect(referencesRuntimeContext("matrix.steps")).toBe(false);
-    expect(referencesRuntimeContext("format('job {0}', github.sha)")).toBe(false);
-    expect(referencesRuntimeContext("inputs.my-steps")).toBe(false);
+  it("leaves expressions over runner contexts (or none) for the runner", () => {
+    expect(runnerCanEvaluate("steps.build.outputs.version")).toBe(true);
+    expect(runnerCanEvaluate("job.status == 'success' && secrets.X")).toBe(true);
+    expect(runnerCanEvaluate("matrix.os == 'linux' && env.A")).toBe(true);
+    expect(runnerCanEvaluate("hashFiles('**/lock')")).toBe(true);
+    expect(runnerCanEvaluate("github.sha")).toBe(false);
+    expect(runnerCanEvaluate("secrets.TOKEN")).toBe(false);
+    expect(runnerCanEvaluate("format('{0}', inputs.x)")).toBe(false);
   });
 
   it("keeps steps/job expressions and expands the rest when asked", () => {

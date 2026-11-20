@@ -2222,7 +2222,12 @@ async function handleWorkflow(options: {
     for (const placeholder of placeholders) {
       const raw = placeholder.deferredMatrix;
       placeholder.deferredMatrix = undefined;
-      if (shouldSkipJob(placeholder.taskName, placeholder)) {
+      try {
+        if (shouldSkipJob(placeholder.taskName, placeholder)) {
+          continue;
+        }
+      } catch {
+        // An invalid if: fails the job when it runs (runOrSkipJob reports it).
         continue;
       }
       const needsCtx = buildNeedsContext(placeholder.taskName);

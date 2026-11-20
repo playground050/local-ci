@@ -471,7 +471,7 @@
         {
           "key": "`github.ref`, `github.ref_name`, `github.head_ref`, `github.base_ref`, `github.actor`, `github.run_id`, `github.run_number`, and other `github.*` fields",
           "status": "partial",
-          "notes": "Returned as static defaults: `ref_name` / `head_ref` default to `main`, `base_ref` is empty, `actor` is the repo owner, `run_id` / `run_number` are `1`, `api_url` / `server_url` point at Local CI's local API emulation. Anything not in this row or one of the ones above resolves to an empty string — that covers `action_path`, `workflow_ref`, `workflow_sha`, `triggering_actor`, `retention_days`, `secret_source`, `token`, `graphql_url`, `job`, `run_attempt`, `ref_protected`, `ref_type`, `env`, `path`, and the rest of the context documented by GitHub.",
+          "notes": "Returned as static defaults: `ref_name` / `head_ref` default to `main`, `base_ref` is empty, `actor` is the repo owner, `run_id` / `run_number` / `run_attempt` are `1`, `ref` is `refs/heads/main`, `ref_type` is `branch`, `event_name` is `push`, `api_url` / `server_url` point at Local CI's local API emulation. Anything not in this row or one of the ones above resolves to an empty string — that covers `action_path`, `workflow_ref`, `workflow_sha`, `triggering_actor`, `retention_days`, `secret_source`, `token`, `graphql_url`, `job`, `ref_protected`, `env`, `path`, and the rest of the context documented by GitHub.",
           "proof": [".github/workflows/smoke-binary.yml"]
         },
         {
@@ -504,8 +504,8 @@
         },
         {
           "key": "`*` object-filter operator",
-          "status": "unsupported",
-          "notes": "Array-of-object filtering like `github.event.commits.*.author.name` is not implemented — the entire expression resolves to an empty string."
+          "status": "supported",
+          "notes": "Array and object filters such as `fromJSON(...).*.name` return the matching values as an array. `github.event.*` is empty locally (see that row), so filters over the event payload return an empty array."
         },
         {
           "key": "`needs.*.outputs.*`",
@@ -519,7 +519,7 @@
         {
           "key": "Boolean/comparison operators",
           "status": "supported",
-          "notes": "`==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `!`, parentheses. Case-insensitive string comparison. Numeric coercion follows GitHub Actions semantics: empty string and `null` become `0`, numeric-looking strings are parsed, anything else becomes `NaN` and compares false.",
+          "notes": "`==`, `!=`, `<`, `>`, `<=`, `>=`, `&&`, `||`, `!`, parentheses. Case-insensitive string comparison. Numeric coercion follows GitHub Actions semantics: empty string and `null` become `0`, numeric-looking strings are parsed, anything else becomes `NaN` and compares false. All expressions Local CI evaluates itself (job `if:`, `runs-on`, matrix, job `env:`, …) use one evaluator with these rules; expressions in steps that only read runner-side contexts are evaluated by the runner.",
           "proof": [
             ".github/workflows/smoke-conditions.yml",
             ".github/workflows/smoke-expressions.yml"
@@ -534,7 +534,7 @@
         {
           "key": "`contains(search, item)`",
           "status": "supported",
-          "notes": "Case-insensitive substring for strings; element membership for JSON arrays (e.g. `contains(fromJSON('[\"a\",\"b\"]'), 'b')`). The `*` object-filter form (`contains(labels.*.name, 'bug')`) is not supported — see the `*` object-filter row.",
+          "notes": "Case-insensitive substring for strings; element membership for arrays, including the `*` object filter (`contains(github.event.pull_request.labels.*.name, 'bug')`).",
           "proof": [".github/workflows/smoke-binary.yml", ".github/workflows/smoke-expressions.yml"]
         },
         {
@@ -552,7 +552,7 @@
         {
           "key": "`join`",
           "status": "supported",
-          "notes": "Joins JSON arrays with a separator (default `, `)",
+          "notes": "Joins JSON arrays with a separator (default `,`, as on GitHub).",
           "proof": [".github/workflows/smoke-expressions.yml"]
         },
         {

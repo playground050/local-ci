@@ -1,4 +1,9 @@
-import { callsStatusFunction, evaluateExpression, isTruthy } from "./expression.ts";
+import {
+  callsStatusFunction,
+  evaluateExpression,
+  isTruthy,
+  toExpressionString,
+} from "./expression.ts";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
@@ -7,6 +12,7 @@ import { promisify } from "util";
 import { minimatch } from "minimatch";
 import { parse as parseYaml } from "yaml";
 import { classifyRunsOn } from "../runner/runs-on-compat.ts";
+import { debugCli } from "../output/debug.ts";
 
 const execFileP = promisify(execFile);
 
@@ -66,89 +72,6 @@ async function loadWorkflowParser() {
 }
 
 /**
- * Check if a string value is truthy following GitHub Actions semantics.
- * Falsy values: empty string, "false", "0".
- */
-function isExprTruthy(val: string): boolean {
-  return val !== "" && val !== "false" && val !== "0";
-}
-
-/**
- * Split a function's argument list on commas, respecting quotes and nested parens.
- */
-function splitFunctionArgs(argsStr: string): string[] {
-  const result: string[] = [];
-  let current = "";
-  let depth = 0;
-  let inQuote: string | null = null;
-  for (let i = 0; i < argsStr.length; i++) {
-    const ch = argsStr[i];
-    if (inQuote) {
-      current += ch;
-      if (ch === inQuote) {
-        inQuote = null;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      inQuote = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-    }
-    if (ch === ")") {
-      depth--;
-    }
-    if (ch === "," && depth === 0) {
-      result.push(current.trim());
-      current = "";
-      continue;
-    }
-    current += ch;
-  }
-  result.push(current.trim());
-  return result;
-}
-
-/** Strip surrounding quotes from a string if present. */
-function unquote(s: string): string {
-  if ((s.startsWith("'") && s.endsWith("'")) || (s.startsWith('"') && s.endsWith('"'))) {
-    return s.slice(1, -1);
-  }
-  return s;
-}
-
-/** Compare two string values using the given operator. */
-function compareValues(left: string, right: string, op: string): boolean {
-  // GitHub Actions coerces both sides to numbers when possible: empty string,
-  // null (surfaced here as ""), and numeric strings all become valid numeric
-  // operands. A genuinely non-numeric string coerces to NaN and comparisons
-  // involving NaN are all false, so bothNumeric stays false for those.
-  const ln = Number(left);
-  const rn = Number(right);
-  const bothNumeric = !isNaN(ln) && !isNaN(rn);
-
-  switch (op) {
-    case "==":
-      return bothNumeric ? ln === rn : left.toLowerCase() === right.toLowerCase();
-    case "!=":
-      return bothNumeric ? ln !== rn : left.toLowerCase() !== right.toLowerCase();
-    case "<":
-      return bothNumeric ? ln < rn : left.toLowerCase() < right.toLowerCase();
-    case ">":
-      return bothNumeric ? ln > rn : left.toLowerCase() > right.toLowerCase();
-    case "<=":
-      return bothNumeric ? ln <= rn : left.toLowerCase() <= right.toLowerCase();
-    case ">=":
-      return bothNumeric ? ln >= rn : left.toLowerCase() >= right.toLowerCase();
-    default:
-      return false;
-  }
-}
-
-/**
  * Bundle for the per-call expansion context. Used by the expression
  * evaluator so each helper takes one argument instead of eight. The
  * public `expandExpressions` keeps its positional signature for callers.
@@ -167,28 +90,13 @@ type ExprContext = {
 
 const ZERO_SHA = "0000000000000000000000000000000000000000";
 
-/**
- * Evaluate a function argument that may be a quoted string literal or a
- * full expression. Used by single-arg functions (fromJSON, toJSON).
- */
-function evalArgOrLiteral(inner: string, ctx: ExprContext): string {
-  const t = inner.trim();
-  if ((t.startsWith("'") && t.endsWith("'")) || (t.startsWith('"') && t.endsWith('"'))) {
-    return t.slice(1, -1);
-  }
-  return evaluateExprValue(t, ctx);
-}
-
-function evalHashFiles(rawArgs: string, ctx: ExprContext): string {
+function evalHashFiles(patterns: string[], ctx: ExprContext): string {
   // Same algorithm as the runner's hashFiles: SHA-256 over the SHA-256 digest
   // of each matched file (each file once), and an empty string when nothing matches.
   if (!ctx.repoPath) {
     return "";
   }
   try {
-    // Parse the argument list: quoted strings separated by commas
-    const args = rawArgs.match(/['"][^'"]*['"]/g) ?? [];
-    const patterns = args.map((a) => a.replace(/^['"]|['"]$/g, ""));
     const hash = crypto.createHash("sha256");
     const seen = new Set<string>();
     for (const pattern of patterns) {
@@ -216,99 +124,11 @@ function evalHashFiles(rawArgs: string, ctx: ExprContext): string {
   }
 }
 
-function evalContains(rawArgs: string, ctx: ExprContext): string {
-  const args = splitFunctionArgs(rawArgs);
-  if (args.length < 2) {
-    return "false";
-  }
-  const haystack = evaluateExprValue(args[0], ctx);
-  const needle = evaluateExprValue(args[1], ctx);
-  try {
-    const arr = JSON.parse(haystack);
-    if (Array.isArray(arr)) {
-      return arr.some((item) => String(item).toLowerCase() === needle.toLowerCase())
-        ? "true"
-        : "false";
-    }
-  } catch {
-    // Not JSON — fall through to string search
-  }
-  return haystack.toLowerCase().includes(needle.toLowerCase()) ? "true" : "false";
-}
-
-function evalStartsWith(rawArgs: string, ctx: ExprContext): string {
-  const args = splitFunctionArgs(rawArgs);
-  if (args.length < 2) {
-    return "false";
-  }
-  const str = evaluateExprValue(args[0], ctx);
-  const prefix = evaluateExprValue(args[1], ctx);
-  return str.toLowerCase().startsWith(prefix.toLowerCase()) ? "true" : "false";
-}
-
-function evalEndsWith(rawArgs: string, ctx: ExprContext): string {
-  const args = splitFunctionArgs(rawArgs);
-  if (args.length < 2) {
-    return "false";
-  }
-  const str = evaluateExprValue(args[0], ctx);
-  const suffix = evaluateExprValue(args[1], ctx);
-  return str.toLowerCase().endsWith(suffix.toLowerCase()) ? "true" : "false";
-}
-
-function evalJoin(rawArgs: string, ctx: ExprContext): string {
-  const args = splitFunctionArgs(rawArgs);
-  const val = evaluateExprValue(args[0], ctx);
-  const sep = args.length >= 2 ? evaluateExprValue(args[1], ctx) : ", ";
-  try {
-    const arr = JSON.parse(val);
-    if (Array.isArray(arr)) {
-      return arr.map(String).join(sep);
-    }
-  } catch {
-    // Not an array — return as-is
-  }
-  return val;
-}
-
-function evalFormat(rawArgs: string, ctx: ExprContext): string {
-  const formatArgs = splitFunctionArgs(rawArgs);
-  const template = unquote(formatArgs[0] || "");
-  const args = formatArgs.slice(1);
-  // `{{` and `}}` are literal braces; `{N}` is the N-th argument.
-  return template.replace(/\{\{|\}\}|\{(\d+)\}/g, (m, idx) => {
-    if (idx === undefined) {
-      return m[0];
-    }
-    const i = parseInt(idx, 10);
-    return i < args.length ? evaluateExprValue(args[i], ctx) : "";
-  });
-}
-
-function evalFromJson(rawArgs: string, ctx: ExprContext): string {
-  const rawValue = evalArgOrLiteral(rawArgs, ctx);
-  try {
-    const parsed = JSON.parse(rawValue);
-    return typeof parsed === "string" ? parsed : JSON.stringify(parsed);
-  } catch {
-    return "";
-  }
-}
-
-const CONTEXT_PATH_RE =
-  /^(github|needs|runner|matrix|strategy|inputs|vars|env)((?:\.[A-Za-z0-9_-]+)*)$/;
-
 /** Drop the internal `__*` bookkeeping keys Local CI stores alongside values. */
 function withoutInternalKeys(record: Record<string, string> | undefined): Record<string, string> {
   return Object.fromEntries(Object.entries(record ?? {}).filter(([key]) => !key.startsWith("__")));
 }
 
-/**
- * Build a whole context object (`github`, `needs`, …) from what Local CI
- * knows, so `toJSON(github)` / `toJSON(needs)` produce JSON instead of an
- * empty string. `steps`, `job` and `secrets` are deliberately left out:
- * steps/job are not populated at parse time and secrets must not be dumped.
- */
 /** Internal key of an inputs context that holds the declared input types. */
 export const INPUT_TYPES_KEY = "__input_types";
 
@@ -333,6 +153,12 @@ function typedInputs(inputs: Record<string, string> | undefined): Record<string,
   );
 }
 
+/**
+ * Build a whole context object (`github`, `needs`, …) from what Local CI
+ * knows, so `toJSON(github)` / `toJSON(needs)` produce JSON instead of an
+ * empty string. `steps`, `job` and `secrets` are deliberately left out:
+ * steps/job are not populated at parse time and secrets must not be dumped.
+ */
 function buildContextObject(name: string, ctx: ExprContext): unknown {
   switch (name) {
     case "github": {
@@ -386,63 +212,6 @@ function buildContextObject(name: string, ctx: ExprContext): unknown {
   }
 }
 
-/**
- * Resolve `github`, `needs.build`, `needs.build.outputs`, … to an object for
- * toJSON. Returns undefined for anything that is not an object so scalar refs
- * keep going through the normal string resolution.
- */
-function resolveContextObject(expr: string, ctx: ExprContext): object | undefined {
-  const match = expr.trim().match(CONTEXT_PATH_RE);
-  if (!match) {
-    return undefined;
-  }
-  let value: unknown = buildContextObject(match[1], ctx);
-  for (const key of match[2].split(".").filter(Boolean)) {
-    if (!value || typeof value !== "object") {
-      return undefined;
-    }
-    value = (value as Record<string, unknown>)[key];
-  }
-  return value && typeof value === "object" ? value : undefined;
-}
-
-// toJSON pretty-prints with 2-space indentation, matching GitHub Actions.
-// We parse rawValue first so `toJSON(fromJSON(...))` round-trips with
-// pretty-printing instead of re-quoting a compact-JSON string.
-function evalToJson(rawArgs: string, ctx: ExprContext): string {
-  const contextObject = resolveContextObject(rawArgs, ctx);
-  if (contextObject !== undefined) {
-    return JSON.stringify(contextObject, null, 2);
-  }
-  const rawValue = evalArgOrLiteral(rawArgs, ctx);
-  try {
-    return JSON.stringify(JSON.parse(rawValue), null, 2);
-  } catch {
-    return JSON.stringify(rawValue, null, 2);
-  }
-}
-
-const FUNCTION_HANDLERS: Record<string, (rawArgs: string, ctx: ExprContext) => string> = {
-  hashFiles: evalHashFiles,
-  fromJSON: evalFromJson,
-  toJSON: evalToJson,
-  format: evalFormat,
-  contains: evalContains,
-  startsWith: evalStartsWith,
-  endsWith: evalEndsWith,
-  join: evalJoin,
-};
-
-const FUNCTION_CALL_RE = /^([A-Za-z][A-Za-z0-9_]*)\(([\s\S]+)\)$/;
-
-// In expression context, status functions resolve to their string name.
-const STATUS_FUNCTIONS: Record<string, string> = {
-  "success()": "true",
-  "failure()": "false",
-  "always()": "true",
-  "cancelled()": "false",
-};
-
 // Constant `github.*` context refs that don't depend on ctx state.
 const CONST_CONTEXT_REFS: Record<string, string> = {
   "github.run_id": "1",
@@ -458,250 +227,86 @@ const CONST_CONTEXT_REFS: Record<string, string> = {
   "github.head_ref": "main",
   "github.repository": "local/repo",
   "github.actor": "local",
-  "github.event.pull_request.number": "",
-  "github.event.pull_request.title": "",
-  "github.event.pull_request.user.login": "",
 };
 
-function resolveNeedsRef(
-  trimmed: string,
-  needsContext: Record<string, Record<string, string>> | undefined,
-): string {
-  if (!needsContext) {
-    return "";
+/** Set `obj.a.b.c = value` for the dotted path `a.b.c`. */
+function setPath(obj: Record<string, unknown>, dotted: string, value: unknown) {
+  const keys = dotted.split(".");
+  let cur = obj;
+  for (const key of keys.slice(0, -1)) {
+    if (!cur[key] || typeof cur[key] !== "object") {
+      cur[key] = {};
+    }
+    cur = cur[key] as Record<string, unknown>;
   }
-  const parts = trimmed.split(".");
-  const jobOutputs = needsContext[parts[1]];
-  if (parts[2] === "outputs" && parts[3]) {
-    return jobOutputs?.[parts[3]] ?? "";
-  }
-  if (parts[2] === "result") {
-    return jobOutputs ? (jobOutputs["__result"] ?? "success") : "";
-  }
-  return "";
+  cur[keys[keys.length - 1]] = value;
 }
 
-/**
- * Resolve a context-variable reference (runner.os, matrix.foo, secrets.X,
- * needs.X.outputs.Y, …). Returns `undefined` when the atom is not a known
- * context ref so the caller can fall through to "unknown atom".
- */
-function resolveContextRef(trimmed: string, ctx: ExprContext): string | undefined {
-  if (trimmed === "runner.os") {
-    return ctx.runnerContext?.os ?? "Linux";
+/** Every context Local CI knows before the job runs, as expression values. */
+function expressionContexts(ctx: ExprContext): Record<string, unknown> {
+  const github: Record<string, unknown> = {};
+  for (const [ref, value] of Object.entries(CONST_CONTEXT_REFS)) {
+    setPath(github, ref.slice("github.".length), value);
   }
-  if (trimmed === "runner.arch") {
-    return ctx.runnerContext?.arch ?? "X64";
+  for (const [key, value] of Object.entries(ctx.githubContext ?? {})) {
+    setPath(github, key, value);
   }
-  if (trimmed === "strategy.job-total") {
-    return ctx.matrixContext?.["__job_total"] ?? "1";
-  }
-  if (trimmed === "strategy.job-index") {
-    return ctx.matrixContext?.["__job_index"] ?? "0";
-  }
-  if (trimmed === "strategy.fail-fast") {
-    return ctx.matrixContext?.["__fail_fast"] ?? "true";
-  }
-  if (trimmed === "strategy.max-parallel") {
-    return ctx.matrixContext?.["__max_parallel"] ?? ctx.matrixContext?.["__job_total"] ?? "1";
-  }
-  if (trimmed.startsWith("github.")) {
-    const key = trimmed.slice("github.".length);
-    const dynamicValue = ctx.githubContext?.[key];
-    if (dynamicValue !== undefined) {
-      return dynamicValue;
-    }
-  }
-  if (trimmed in CONST_CONTEXT_REFS) {
-    return CONST_CONTEXT_REFS[trimmed];
-  }
-  if (trimmed.startsWith("matrix.")) {
-    return ctx.matrixContext?.[trimmed.slice("matrix.".length)] ?? "";
-  }
-  if (trimmed.startsWith("secrets.")) {
-    return ctx.secrets?.[trimmed.slice("secrets.".length)] ?? "";
-  }
-  if (trimmed.startsWith("vars.")) {
-    return ctx.vars?.[trimmed.slice("vars.".length)] ?? "";
-  }
-  if (trimmed.startsWith("inputs.")) {
-    return ctx.inputsContext?.[trimmed.slice("inputs.".length)] ?? "";
-  }
-  if (trimmed.startsWith("steps.")) {
-    // Step-output references can't be resolved at parse time — the producing
-    // step hasn't run yet — and the runner does not re-evaluate `${{ }}`
-    // inside run-script bodies at runtime. Returning the sentinel used to
-    // leak the literal `${{ }}` to bash and trigger "bad substitution".
-    // Per the compatibility contract, resolve to an empty string at parse time.
-    return "";
-  }
-  if (trimmed.startsWith("needs.")) {
-    return resolveNeedsRef(trimmed, ctx.needsContext);
-  }
-  if (trimmed.startsWith("env.")) {
-    return ctx.envContext?.[trimmed.slice("env.".length)] ?? "";
-  }
-  return undefined;
+  return {
+    github,
+    needs: buildContextObject("needs", ctx),
+    runner: buildContextObject("runner", ctx),
+    matrix: buildContextObject("matrix", ctx),
+    strategy: buildContextObject("strategy", ctx),
+    inputs: buildContextObject("inputs", ctx),
+    vars: buildContextObject("vars", ctx),
+    env: buildContextObject("env", ctx),
+    secrets: { ...ctx.secrets },
+    // Only known while the job runs; empty here.
+    steps: {},
+    job: {},
+  };
 }
 
-/**
- * Resolve a single atomic expression (function call or context variable).
- * Does not handle boolean operators, parentheses, or string literals.
- */
-function resolveExprAtom(trimmed: string, ctx: ExprContext): string {
-  const fnMatch = trimmed.match(FUNCTION_CALL_RE);
-  if (fnMatch) {
-    const handler = FUNCTION_HANDLERS[fnMatch[1]];
-    if (handler) {
-      return handler(fnMatch[2], ctx);
-    }
-  }
-
-  if (trimmed in STATUS_FUNCTIONS) {
-    return STATUS_FUNCTIONS[trimmed];
-  }
-
-  const ctxRef = resolveContextRef(trimmed, ctx);
-  if (ctxRef !== undefined) {
-    return ctxRef;
-  }
-
-  // Unknown atoms — return empty string
-  return "";
-}
+// toJSON() of these gives the JSON of an empty string: secrets must not be printed, and steps/job are
+// only known while the job runs.
+const NOT_DUMPABLE_RE = /^toJSON\(\s*(secrets|steps|job)\s*\)$/i;
 
 /**
- * If `trimmed` is wrapped in matching outer parentheses, return the inner
- * string. Otherwise return null. Quotes are skipped so parens inside string
- * literals don't fool the matcher.
- */
-function stripOuterParens(trimmed: string): string | null {
-  if (!trimmed.startsWith("(")) {
-    return null;
-  }
-  let depth = 0;
-  let inQuote: string | null = null;
-  for (let i = 0; i < trimmed.length; i++) {
-    const ch = trimmed[i];
-    if (inQuote) {
-      if (ch === inQuote) {
-        inQuote = null;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      inQuote = ch;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-    } else if (ch === ")") {
-      depth--;
-    }
-    if (depth === 0) {
-      return i === trimmed.length - 1 ? trimmed.slice(1, -1) : null;
-    }
-  }
-  return null;
-}
-
-/**
- * Evaluate the left/right operands and apply the comparison if `trimmed`
- * splits cleanly on `op`. Returns null when the operator isn't a top-level
- * split point.
- */
-function evalComparison(trimmed: string, op: string, ctx: ExprContext): string | null {
-  const parts = splitOnOperator(trimmed, op);
-  if (parts.length !== 2) {
-    return null;
-  }
-  const left = evaluateExprValue(parts[0].trim(), ctx);
-  const right = evaluateExprValue(parts[1].trim(), ctx);
-  return compareValues(left, right, op) ? "true" : "false";
-}
-
-/**
- * Evaluate an expression that may contain ||, &&, !, parentheses,
- * string literals, function calls, and context variable references.
- * Returns the string result following GitHub Actions expression semantics.
+ * Evaluate an expression Local CI resolves itself (outside what is left for
+ * the runner) with the same evaluator and typing rules as job `if:`, and turn
+ * the value into the string GitHub would substitute.
  */
 function evaluateExprValue(expr: string, ctx: ExprContext): string {
   const trimmed = expr.trim();
   if (!trimmed) {
     return "";
   }
-
-  const stripped = stripOuterParens(trimmed);
-  if (stripped !== null) {
-    return evaluateExprValue(stripped, ctx);
+  if (NOT_DUMPABLE_RE.test(trimmed)) {
+    return '""'; // toJSON of an empty string
   }
-
-  // || (lowest precedence) — return first truthy, else the last value.
-  const orParts = splitOnOperator(trimmed, "||");
-  if (orParts.length > 1) {
-    let lastVal = "";
-    for (const part of orParts) {
-      lastVal = evaluateExprValue(part.trim(), ctx);
-      if (isExprTruthy(lastVal)) {
-        return lastVal;
-      }
-    }
-    return lastVal;
-  }
-
-  // && (higher precedence than ||) — return first falsy, else the last value.
-  const andParts = splitOnOperator(trimmed, "&&");
-  if (andParts.length > 1) {
-    let lastVal = "";
-    for (const part of andParts) {
-      lastVal = evaluateExprValue(part.trim(), ctx);
-      if (!isExprTruthy(lastVal)) {
-        return lastVal;
-      }
-    }
-    return lastVal;
-  }
-
-  // Comparison operators. Longer operators first so `<=` doesn't get split as `<`.
-  for (const op of ["!=", "==", "<=", ">=", "<", ">"]) {
-    const result = evalComparison(trimmed, op, ctx);
-    if (result !== null) {
-      return result;
-    }
-  }
-
-  // ! prefix (negation)
-  if (trimmed.startsWith("!")) {
-    const inner = evaluateExprValue(trimmed.slice(1).trim(), ctx);
-    return isExprTruthy(inner) ? "false" : "true";
-  }
-
-  // String literal
-  if (
-    (trimmed.startsWith("'") && trimmed.endsWith("'")) ||
-    (trimmed.startsWith('"') && trimmed.endsWith('"'))
-  ) {
-    return trimmed.slice(1, -1);
-  }
-
-  // Boolean / null literals
-  if (trimmed === "true") {
-    return "true";
-  }
-  if (trimmed === "false") {
-    return "false";
-  }
-  if (trimmed === "null") {
+  try {
+    const value = evaluateExpression(trimmed, {
+      contexts: expressionContexts(ctx),
+      functions: {
+        hashfiles: (...patterns) => evalHashFiles(patterns.map(toExpressionString), ctx),
+        // Outside a job's own `if:` there is no upstream result to look at.
+        success: () => true,
+        always: () => true,
+        failure: () => false,
+        cancelled: () => false,
+      },
+    });
+    // A whole array/object (e.g. `fromJSON(...)` for a matrix) is passed on as
+    // JSON, which is what the callers parse; GitHub keeps it as an object.
+    return value !== null && typeof value === "object"
+      ? JSON.stringify(value)
+      : toExpressionString(value);
+  } catch (err) {
+    // GitHub rejects such a workflow up front; Local CI substitutes an empty
+    // string so the rest of the job can still run.
+    debugCli(`Could not evaluate \${{ ${trimmed} }}: ${(err as Error).message}`);
     return "";
   }
-
-  // Numeric literal
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
-    return trimmed;
-  }
-
-  // Atom: function call or context variable
-  return resolveExprAtom(trimmed, ctx);
 }
 
 /**
@@ -817,17 +422,6 @@ export function runnerCanEvaluate(expr: string): boolean {
     return true;
   }
   return roots.every((r) => RUNNER_CONTEXTS.has(r));
-}
-
-// `steps` and `job` only exist while the job runs. References to them (outside
-// string literals, and not as a property such as `github.job`) must be left for
-// the runner to evaluate.
-const RUNTIME_CONTEXT_RE = /(^|[^\w.-])(steps|job)\b(?!-)/;
-
-/** Whether an expression reads the `steps` or `job` context. */
-export function referencesRuntimeContext(expr: string): boolean {
-  const withoutStrings = expr.replace(/'(?:[^']|'')*'/g, "''");
-  return RUNTIME_CONTEXT_RE.test(withoutStrings);
 }
 
 function toStringRecord(value: unknown): Record<string, string> {
@@ -2075,14 +1669,6 @@ export function parseStepIf(rawIf: unknown): string | undefined {
   return callsStatusFunction(expr) ? expr : `success() && (${expr})`;
 }
 
-/**
- * Evaluate a job-level `if:` condition.
- *
- * @param expr       The expression string (already stripped of `${{ }}`)
- * @param jobResults Record<jobId, "success" | "failure"> for upstream jobs
- * @param needsCtx   Optional needs output context (same shape as expandExpressions needsContext)
- * @returns          Whether the job should run
- */
 /** The contexts a job-level `if:` can read besides `needs`: github, vars, inputs. */
 export function jobIfContexts(
   githubContext?: Record<string, string>,
@@ -2097,6 +1683,14 @@ export function jobIfContexts(
   };
 }
 
+/**
+ * Evaluate a job-level `if:` condition.
+ *
+ * @param expr       The expression string (already stripped of `${{ }}`)
+ * @param jobResults Record<jobId, "success" | "failure"> for upstream jobs
+ * @param needsCtx   Optional needs output context (same shape as expandExpressions needsContext)
+ * @returns          Whether the job should run
+ */
 export function evaluateJobIf(
   expr: string,
   jobResults: Record<string, string>,
@@ -2137,47 +1731,6 @@ export function evaluateJobIf(
   } catch (err) {
     throw new Error(`Invalid job if: ${expr} (${(err as Error).message})`);
   }
-}
-
-/**
- * Split an expression on a logical operator, respecting parentheses and quotes.
- */
-function splitOnOperator(expr: string, op: string): string[] {
-  const parts: string[] = [];
-  let depth = 0;
-  let inQuote: string | null = null;
-  let current = "";
-
-  for (let i = 0; i < expr.length; i++) {
-    const ch = expr[i];
-    if (inQuote) {
-      current += ch;
-      if (ch === inQuote) {
-        inQuote = null;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      inQuote = ch;
-      current += ch;
-      continue;
-    }
-    if (ch === "(") {
-      depth++;
-    }
-    if (ch === ")") {
-      depth--;
-    }
-    if (depth === 0 && expr.slice(i, i + op.length) === op) {
-      parts.push(current);
-      current = "";
-      i += op.length - 1;
-      continue;
-    }
-    current += ch;
-  }
-  parts.push(current);
-  return parts;
 }
 
 /**
