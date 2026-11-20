@@ -18,6 +18,7 @@ Options:
   -w, --workflow <path>         Path to the workflow file
   -a, --all                     Discover and run all relevant workflows
   -p, --pause-on-failure         Pause on step failure for interactive debugging
+  --continue-on-error <mode>     With -p: pause (default) or continue on continue-on-error steps
   -q, --quiet                   Suppress animated rendering (also enabled by AI_AGENT=1)
       --json                    Emit NDJSON event stream on stdout (also enabled by LOCAL_CI_JSON=1)
       --no-matrix               Collapse all matrix combinations into a single job (uses first value of each key)
@@ -87,6 +88,8 @@ pub struct RunArgs {
     pub commit_status: bool,
     pub cli_vars: Vec<(String, String)>,
     pub var_files: Vec<String>,
+    /// `--continue-on-error <pause|continue>`: how `continue-on-error` steps behave with `-p`.
+    pub continue_on_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -196,6 +199,14 @@ where
     }
 }
 
+fn parse_continue_on_error(raw: &str) -> Result<String, String> {
+    if raw == "pause" || raw == "continue" {
+        Ok(raw.to_owned())
+    } else {
+        Err("[Local CI] Error: --continue-on-error expects pause or continue".to_owned())
+    }
+}
+
 fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
     let mut parsed = RunArgs::default();
     let mut index = 0;
@@ -219,6 +230,10 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
                 parsed.prewarm_through = Some(take_next(args, &mut index, arg)?);
             }
             "--commit-status" => parsed.commit_status = true,
+            "--continue-on-error" => {
+                let raw = take_next(args, &mut index, arg)?;
+                parsed.continue_on_error = Some(parse_continue_on_error(&raw)?);
+            }
             "--var" => {
                 let raw = take_next(args, &mut index, arg)?;
                 parsed.cli_vars.push(parse_var_flag(&raw)?);
@@ -251,6 +266,8 @@ fn parse_run_args(args: &[String]) -> Result<RunArgs, String> {
                         return Err("--var-file expects a path or - for stdin".to_owned());
                     }
                     parsed.var_files.push(value.to_owned());
+                } else if let Some(value) = arg.strip_prefix("--continue-on-error=") {
+                    parsed.continue_on_error = Some(parse_continue_on_error(value)?);
                 } else if let Some(value) = arg.strip_prefix("--github-token=") {
                     parsed.github_token = GithubTokenFlag::Value(value.to_owned());
                 } else if !arg.starts_with('-') {
@@ -396,6 +413,7 @@ mod tests {
                 commit_status: true,
                 cli_vars: vec![("FOO".to_owned(), "bar".to_owned())],
                 var_files: vec!["vars.json".to_owned()],
+                continue_on_error: None,
             }))
         );
     }
