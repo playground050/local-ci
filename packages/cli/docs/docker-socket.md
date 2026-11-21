@@ -45,6 +45,18 @@ sudo ln -sf "$HOME/.colima/docker.sock" /var/run/docker.sock
 
 Why the top-level `~/.colima/docker.sock` and not `~/.colima/<profile>/docker.sock`? The profile-internal path is the socket Colima advertises via `docker context inspect`, but Docker's mount layer can't bind-mount it through Colima's VM ([operation not supported]). The top-level alias `~/.colima/docker.sock` is the stable, mountable entry point.
 
+### Podman (macOS)
+
+Podman does not create `/var/run/docker.sock` by default. Install the helper that creates it, then restart the machine:
+
+```sh
+sudo "$(brew --prefix podman)/bin/podman-mac-helper" install
+podman machine stop
+podman machine start
+```
+
+For the rest of the Podman setup (provider, shared folders, working directory), see [Podman (macOS)](./podman.md).
+
 ### Native Linux (dockerd)
 
 `/var/run/docker.sock` should already exist — that's where dockerd creates it. If it's missing, check that the Docker daemon is running (`systemctl status docker`). If it exists but you can't R/W it, add yourself to the `docker` group (`sudo usermod -aG docker $USER` and re-login) — local-ci handles the "exists but not readable by our UID" case by reading the socket path from `docker context inspect` and still using `/var/run/docker.sock` as the bind-mount source.

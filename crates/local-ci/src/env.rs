@@ -180,6 +180,13 @@ fn strip_wrapping_quotes(value: &str) -> &str {
     }
 }
 
+/// Whether this process runs inside a container. Docker creates `/.dockerenv`;
+/// Podman creates `/run/.containerenv` instead.
+pub fn inside_container() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
+        || std::path::Path::new("/run/.containerenv").exists()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

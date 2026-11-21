@@ -1,3 +1,4 @@
+import { isInsideContainer } from "../docker/engine.ts";
 import path from "node:path";
 import os from "node:os";
 import fs from "node:fs";
@@ -9,7 +10,7 @@ export const PROJECT_ROOT = path.resolve(fileURLToPath(import.meta.url), "..", "
 // When running inside a container with Docker-outside-of-Docker (shared socket),
 // /tmp is NOT visible to the Docker host. Use a project-relative directory
 // so bind mounts resolve correctly on the host.
-const isInsideDocker = fs.existsSync("/.dockerenv");
+const isInsideDocker = isInsideContainer();
 
 /**
  * Linux + Docker Desktop: `/tmp` is not in Docker Desktop's default shared-folder

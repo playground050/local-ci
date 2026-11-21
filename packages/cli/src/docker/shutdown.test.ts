@@ -351,11 +351,12 @@ function dockerAvailable(): boolean {
 }
 
 function insideDocker(): boolean {
-  return fs.existsSync("/.dockerenv");
+  // Docker creates /.dockerenv, Podman /run/.containerenv.
+  return fs.existsSync("/.dockerenv") || fs.existsSync("/run/.containerenv");
 }
 
-// Skip inside containers: killOrphanedContainers bails when /.dockerenv
-// exists (PID namespace mismatch), so integration tests can't exercise it.
+// Skip inside containers: killOrphanedContainers bails inside a container
+// (PID namespace mismatch), so integration tests can't exercise it.
 describe.skipIf(!dockerAvailable() || insideDocker())(
   "killOrphanedContainers (Docker integration)",
   () => {

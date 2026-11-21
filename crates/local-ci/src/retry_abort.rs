@@ -201,7 +201,7 @@ fn resolve_working_dir(env: &BTreeMap<String, String>, current_dir: &Path) -> Pa
         };
     }
     let repo_root = crate::env::resolve_repo_root(current_dir);
-    if Path::new("/.dockerenv").exists() {
+    if crate::env::inside_container() {
         return repo_root.join(".local-ci");
     }
     let project_slug = repo_root

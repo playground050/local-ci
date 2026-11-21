@@ -25,14 +25,14 @@ pub(super) fn default_working_dir(repo_root: &Path) -> PathBuf {
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("repo");
-    if Path::new("/.dockerenv").exists() {
+    if crate::env::inside_container() {
         return repo_root.join(".local-ci");
     }
     std::env::temp_dir().join("local-ci").join(project_slug)
 }
 
 pub(super) fn resolve_dtu_host(env: &BTreeMap<String, String>) -> String {
-    let inside_docker = Path::new("/.dockerenv").exists();
+    let inside_docker = crate::env::inside_container();
     if !inside_docker {
         if let Some(configured) = env
             .get("LOCAL_CI_DTU_HOST")

@@ -93,7 +93,10 @@ describe("ensureImagePulled", () => {
 
     // Assert: image must now be inspectable
     const info = await docker.getImage(TEST_IMAGE).inspect();
-    expect(info.RepoTags).toContain(TEST_IMAGE);
+    // Podman reports Docker Hub images with their full name (docker.io/library/…)
+    expect(
+      info.RepoTags?.some((t) => t === TEST_IMAGE || t === `docker.io/library/${TEST_IMAGE}`),
+    ).toBe(true);
   });
 
   it(
@@ -151,6 +154,9 @@ describe("ensureImagePulled", () => {
     // Assert: exactly one underlying pull, and image is now present
     expect(pullInvocations).toBe(1);
     const info = await docker.getImage(TEST_IMAGE).inspect();
-    expect(info.RepoTags).toContain(TEST_IMAGE);
+    // Podman reports Docker Hub images with their full name (docker.io/library/…)
+    expect(
+      info.RepoTags?.some((t) => t === TEST_IMAGE || t === `docker.io/library/${TEST_IMAGE}`),
+    ).toBe(true);
   });
 });

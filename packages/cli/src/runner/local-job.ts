@@ -27,6 +27,7 @@ import { prepareWorkspace } from "./workspace.ts";
 import { createRunDirectories } from "./directory-setup.ts";
 import { publishDependencyCache, restoreDependencyCache } from "./node-modules-cache.ts";
 import { writeDetachedMarker } from "../launcher.ts";
+import { isInsideContainer, isPodmanEngine } from "../docker/engine.ts";
 import {
   buildContainerEnv,
   buildContainerBinds,
@@ -602,7 +603,7 @@ export async function executeLocalJob(
   // runner images do not expose /.dockerenv, so also trust the env that our
   // outer runner injects into job containers.
   const isNestedContainer =
-    fs.existsSync("/.dockerenv") ||
+    isInsideContainer() ||
     process.env.LOCAL_CI_LOCAL === "true" ||
     process.env.LOCAL_CI_LOCAL_SYNC === "true";
   const nestedHost = isNestedContainer ? process.env.HOSTNAME?.slice(0, 12) : "";
@@ -938,6 +939,22 @@ export async function executeLocalJob(
 
     const extraContainerOpts = parseContainerOptions(job.container?.options);
 
+    // Podman on macOS shares host folders over virtiofs, where GNU tar cannot
+    // open the mode-000 placeholder it writes for a symlink with `..` in its
+    // target ("tar: bin/npm: Cannot open: Permission denied" in setup-node).
+    // Keep the runner's temp dir, where actions download and extract, inside
+    // the container instead.
+    //
+    // Podman machine runs SELinux, which denies a container access to the
+    // bind-mounted API socket ("connect EACCES /var/run/docker.sock" for
+    // nested docker / local-ci use) unless labeling is disabled for it.
+    const podmanHostConfig = (await isPodmanEngine(getDocker()))
+      ? {
+          Tmpfs: { "/home/runner/_work/_temp": "rw,exec,mode=1777" },
+          SecurityOpt: ["label=disable"],
+        }
+      : {};
+
     t0 = Date.now();
     container = await getDocker().createContainer({
       Image: containerImage,
@@ -953,6 +970,7 @@ export async function executeLocalJob(
         Binds: containerBinds,
         AutoRemove: false,
         Ulimits: [{ Name: "nofile", Soft: 65536, Hard: 65536 }],
+        ...podmanHostConfig,
         ...(serviceCtx
           ? { NetworkMode: serviceCtx.networkName }
           : nestedNetworkName
@@ -1056,6 +1074,9 @@ export async function executeLocalJob(
       containerWaitPromise
         .then(() => {
           (rawStream as any).destroy?.();
+          // Podman keeps the follow log stream open after the container exits,
+          // and readline does not emit "close" when its input is destroyed.
+          rl.close();
         })
         .catch(() => {});
     });

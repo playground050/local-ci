@@ -1,3 +1,4 @@
+import { isInsideContainer } from "./engine.ts";
 import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "node:child_process";
@@ -62,7 +63,7 @@ export function killRunnerContainers(runnerName: string): void {
 export function pruneOrphanedDockerResources(): void {
   // Skip when running inside a Docker container — we share the host's
   // Docker socket, so pruning would remove the host's containers/networks.
-  if (fs.existsSync("/.dockerenv")) {
+  if (isInsideContainer()) {
     return;
   }
 
@@ -138,7 +139,7 @@ export function killOrphanedContainers(): void {
   // integration tests inside a runner container). The pid labels reference
   // host PIDs which don't exist in the container's PID namespace — every
   // container would look like an orphan, including our own parent.
-  if (fs.existsSync("/.dockerenv")) {
+  if (isInsideContainer()) {
     return;
   }
 

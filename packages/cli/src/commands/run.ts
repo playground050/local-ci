@@ -1,3 +1,4 @@
+import { isInsideContainer } from "../docker/engine.ts";
 import { execFile, execSync } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -1232,7 +1233,7 @@ async function runWorkflows(options: {
   // smoke-bun-setup step 8). The shared Docker socket exposes the host's
   // containers, and killOrphanedContainers would kill our parent container
   // because host PIDs don't exist in the container's PID namespace.
-  if (!fs.existsSync("/.dockerenv")) {
+  if (!isInsideContainer()) {
     pruneOrphanedDockerResources();
     killOrphanedContainers();
   }

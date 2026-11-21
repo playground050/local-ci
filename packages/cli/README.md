@@ -52,6 +52,7 @@ Local CI does not re-implement GitHub Actions. It emulates the **server-side API
 - **Docker** — a running Docker provider:
   - **macOS:** [OrbStack](https://orbstack.dev/) (recommended) or Docker Desktop
   - **Linux:** Native Docker Engine or Docker Desktop
+  - **Podman** — a Podman machine on macOS also works; see [Podman (macOS)](./docs/podman.md)
 - **Optional — for `runs-on: macos-*` jobs** (Apple Silicon Macs only):
   - [tart](https://github.com/cirruslabs/tart) — `brew install cirruslabs/cli/tart`
   - `sshpass` — `brew install hudochenkov/sshpass/sshpass`

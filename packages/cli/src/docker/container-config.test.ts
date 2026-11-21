@@ -307,7 +307,7 @@ describe("resolveDtuHost", () => {
     const originalExistsSync = fs.existsSync;
 
     vi.spyOn(fs, "existsSync").mockImplementation((filePath: fs.PathLike) => {
-      if (filePath === "/.dockerenv") {
+      if (filePath === "/.dockerenv" || filePath === "/run/.containerenv") {
         return false;
       }
       return originalExistsSync(filePath);
@@ -322,7 +322,7 @@ describe("resolveDtuHost", () => {
     const originalExistsSync = fs.existsSync;
 
     vi.spyOn(fs, "existsSync").mockImplementation((filePath: fs.PathLike) => {
-      if (filePath === "/.dockerenv") {
+      if (filePath === "/.dockerenv" || filePath === "/run/.containerenv") {
         return false;
       }
       return originalExistsSync(filePath);
@@ -338,7 +338,7 @@ describe("resolveDtuHost", () => {
     const originalExistsSync = fs.existsSync;
 
     vi.spyOn(fs, "existsSync").mockImplementation((filePath: fs.PathLike) => {
-      if (filePath === "/.dockerenv") {
+      if (filePath === "/.dockerenv" || filePath === "/run/.containerenv") {
         return false;
       }
       return originalExistsSync(filePath);

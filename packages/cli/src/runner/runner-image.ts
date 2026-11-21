@@ -1,7 +1,9 @@
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import type Docker from "dockerode";
+import { isPodmanEngine } from "../docker/engine.ts";
 import { ensureImagePulled } from "../docker/image-pull.ts";
 import { debugRunner } from "../output/debug.ts";
 
@@ -161,13 +163,74 @@ export async function ensureRunnerImage(
   }
 }
 
-async function buildIfMissing(docker: Docker, resolved: ResolvedRunnerImage): Promise<string> {
+/** The image's name when it exists locally, otherwise undefined. */
+async function inspectLocalImage(docker: Docker, tag: string): Promise<string | undefined> {
   try {
-    await docker.getImage(resolved.image).inspect();
-    debugRunner(`Runner image ${resolved.image} is cached`);
-    return resolved.image;
+    await docker.getImage(tag).inspect();
+    return tag;
   } catch {
-    // Not built yet — fall through
+    return undefined;
+  }
+}
+
+/** All files under `dir`, relative to it (the build context sent to the engine). */
+function listContextFiles(dir: string, prefix = ""): string[] {
+  const out: string[] = [];
+  for (const entry of fs.readdirSync(path.join(dir, prefix), { withFileTypes: true })) {
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      out.push(...listContextFiles(dir, rel));
+    } else {
+      out.push(rel);
+    }
+  }
+  return out;
+}
+
+/** Build `resolved` with the engine's build API and wait for it to finish. */
+async function buildWithEngineApi(docker: Docker, resolved: ResolvedRunnerImage): Promise<void> {
+  let contextDir = resolved.contextDir;
+  let tempDir: string | undefined;
+  if (!contextDir) {
+    // A lone Dockerfile: send it as the only file of an otherwise empty context.
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "local-ci-build-"));
+    fs.copyFileSync(resolved.dockerfilePath!, path.join(tempDir, "Dockerfile"));
+    contextDir = tempDir;
+  }
+  const dockerfile = resolved.contextDir
+    ? path.relative(contextDir, resolved.dockerfilePath!).split(path.sep).join("/")
+    : "Dockerfile";
+  try {
+    const stream = await docker.buildImage(
+      { context: contextDir, src: listContextFiles(contextDir) },
+      { t: resolved.image, dockerfile },
+    );
+    const output: any[] = await new Promise((resolve, reject) =>
+      docker.modem.followProgress(stream, (err: unknown, res: any[]) =>
+        err ? reject(err) : resolve(res),
+      ),
+    );
+    const failure = output.find((o) => o?.error || o?.errorDetail);
+    if (failure) {
+      const log = output.map((o) => o?.stream ?? "").join("");
+      throw new Error(`${log}${failure.errorDetail?.message ?? failure.error}`);
+    }
+  } catch (err) {
+    throw new Error(
+      `Failed to build runner image from ${resolved.sourceLabel}:\n\n${(err as Error).message ?? err}`,
+    );
+  } finally {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  }
+}
+
+async function buildIfMissing(docker: Docker, resolved: ResolvedRunnerImage): Promise<string> {
+  const cachedName = await inspectLocalImage(docker, resolved.image);
+  if (cachedName) {
+    debugRunner(`Runner image ${cachedName} is cached`);
+    return cachedName;
   }
 
   // The user's Dockerfile likely inherits FROM the upstream runner. Pull it
@@ -185,6 +248,15 @@ async function buildIfMissing(docker: Docker, resolved: ResolvedRunnerImage): Pr
       `  Subsequent runs reuse the cached image and take ~0s.\n\n`,
   );
   debugRunner(`Building runner image ${resolved.image} from ${resolved.sourceLabel}...`);
+
+  // Podman: build through its API (buildah). The `docker` CLI in front of
+  // Podman uses a buildx builder whose result never reaches Podman's image
+  // store unless the user sets DOCKER_BUILDKIT=0 or a loading builder, and a
+  // nested Local CI cannot rely on that.
+  if (await isPodmanEngine(docker)) {
+    await buildWithEngineApi(docker, resolved);
+    return (await inspectLocalImage(docker, resolved.image)) ?? resolved.image;
+  }
 
   const { execSync } = await import("node:child_process");
   try {
@@ -208,7 +280,7 @@ async function buildIfMissing(docker: Docker, resolved: ResolvedRunnerImage): Pr
     );
   }
 
-  return resolved.image;
+  return (await inspectLocalImage(docker, resolved.image)) ?? resolved.image;
 }
 
 function shellQuote(s: string): string {
@@ -280,11 +352,15 @@ export function detectToolcacheHint(
     return null;
   }
   return [
-    `Hint: extraction under /opt/hostedtoolcache failed because files from a`,
-    `previous run are owned by a user this run can't overwrite. Delete the`,
-    `host-side toolcache and re-run:`,
+    `Hint: tar could not write a file while extracting. Usually files from a`,
+    `previous run in the toolcache are owned by a user this run can't`,
+    `overwrite. Delete the host-side toolcache and re-run:`,
     ``,
     `    sudo rm -rf ${shellQuote(toolCacheDir)}`,
+    ``,
+    `If it fails again on an empty toolcache with a container engine that shares`,
+    `host folders over virtiofs (e.g. Podman on macOS), the cause is extraction`,
+    `into a host folder; Local CI keeps the runner's temp dir in a tmpfs on Podman.`,
   ].join("\n");
 }
 

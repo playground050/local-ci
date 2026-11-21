@@ -54,6 +54,7 @@ function resolveContainerIp(): string | undefined {
 function resolveContainerHost(): string {
   const isInsideDocker =
     fs.existsSync("/.dockerenv") ||
+    fs.existsSync("/run/.containerenv") ||
     process.env.LOCAL_CI_LOCAL === "true" ||
     process.env.LOCAL_CI_LOCAL_SYNC === "true";
   return resolveContainerHostForEnv({

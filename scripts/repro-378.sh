@@ -32,7 +32,8 @@ SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 LOCAL_CI="$REPO_ROOT/scripts/local-ci-dev.sh"
 
-if [ -f /.dockerenv ]; then
+# Docker creates /.dockerenv, Podman /run/.containerenv.
+if [ -f /.dockerenv ] || [ -f /run/.containerenv ]; then
   # Nested Docker runners cannot bind-mount the outer container's /tmp into
   # sibling containers. Keep the fixture under the bind-mounted source repo.
   TMP="$(mktemp -d "$REPO_ROOT/.repro-378.XXXXXX")"

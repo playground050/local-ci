@@ -229,6 +229,7 @@ export function buildContainerCmd(opts: ContainerCmdOpts): string[] {
 
 // ─── DTU host resolution ──────────────────────────────────────────────────────
 
+import { isInsideContainer } from "./engine.ts";
 import fs from "fs";
 import { execSync } from "child_process";
 import { debugRunner } from "../output/debug.ts";
@@ -249,7 +250,7 @@ function parseCsvEnv(value: string): string[] {
 }
 
 export async function resolveDtuHost(): Promise<string> {
-  const isInsideDocker = fs.existsSync("/.dockerenv");
+  const isInsideDocker = isInsideContainer();
 
   // When running inside a container (nested local-ci), ignore the inherited
   // LOCAL_CI_DTU_HOST — it points to the parent's DTU host (e.g.
@@ -345,7 +346,7 @@ function getMountMappings(): MountMapping[] {
     return _mountMappings;
   }
 
-  if (!fs.existsSync("/.dockerenv")) {
+  if (!isInsideContainer()) {
     _mountMappings = [];
     return _mountMappings;
   }
